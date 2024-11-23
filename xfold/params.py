@@ -10,6 +10,11 @@
 
 """Model param loading."""
 
+from enum import Enum
+from dataclasses import dataclass
+from functools import partial
+from typing import Union, List
+
 import bisect
 import collections
 from collections.abc import Iterator
@@ -79,7 +84,8 @@ def _read_record(stream: IO[bytes]) -> tuple[str, str, np.ndarray] | None:
     scope = scope.decode('utf-8')
     name = name.decode('utf-8')
     dtype = dtype.decode('utf-8')
-    arr = torch.frombuffer(bytearray(payload[-arr_buffer_len:]), dtype=_DTYPE_MAP[dtype])
+    arr = torch.frombuffer(
+        bytearray(payload[-arr_buffer_len:]), dtype=_DTYPE_MAP[dtype])
     arr = torch.reshape(arr, shape)
     return scope, name, arr
 
@@ -219,3 +225,261 @@ def get_alphafold3_params(checkpoint_path: str):
         for scope, name, arr in read_records(stream):
             params[f"{scope}/{name}"] = arr
     return params
+
+
+def stacked(param_dict_list, out=None):
+    """
+    Args:
+        param_dict_list:
+            A list of (nested) Param dicts to stack. The structure of
+            each dict must be the identical (down to the ParamTypes of
+            "parallel" Params). There must be at least one dict
+            in the list.
+    """
+    if out is None:
+        out = {}
+    template = param_dict_list[0]
+    for k, _ in template.items():
+        v = [d[k] for d in param_dict_list]
+        if type(v[0]) is dict:
+            out[k] = {}
+            stacked(v, out=out[k])
+        elif type(v[0]) is Param:
+            stacked_param = Param(
+                param=[param.param for param in v],
+                param_type=v[0].param_type,
+                stacked=True,
+            )
+
+            out[k] = stacked_param
+
+    return out
+
+
+def _process_translations_dict(d, _key_prefix, top_layer=True):
+    flat = {}
+    for k, v in d.items():
+        if type(v) == dict:
+            prefix = _key_prefix if top_layer else ""
+            sub_flat = {
+                (prefix + "/".join([k, k_prime])): v_prime
+                for k_prime, v_prime in _process_translations_dict(
+                    v, _key_prefix, top_layer=False
+                ).items()
+            }
+            flat.update(sub_flat)
+        else:
+            flat[k] = v
+
+    return flat
+
+
+def assign(translation_dict, param_to_load):
+    for k, param in translation_dict.items():
+        with torch.no_grad():
+            weights = torch.as_tensor(param_to_load[k])
+            ref, param_type = param.param, param.param_type
+            if param.stacked:
+                weights = torch.unbind(weights, 0)
+            else:
+                weights = [weights]
+                ref = [ref]
+
+            try:
+                weights = list(map(param_type.transformation, weights))
+                for p, w in zip(ref, weights):
+                    p.copy_(w)
+            except:
+                print(k)
+                print(ref[0].shape)
+                print(weights[0].shape)
+                raise
+
+
+# With Param, a poor man's enum with attributes (Rust-style)
+class ParamType(Enum):
+    LinearWeight = partial(  # hack: partial prevents fns from becoming methods
+        lambda w: w.transpose(-1, -2)
+    )
+    LinearWeightMHA = partial(
+        lambda w: w.reshape(*w.shape[:-2], -1).transpose(-1, -2)
+    )
+    LinearWeightNoTransposeMHA = partial(
+        lambda w: w.reshape(-1, w.shape[-1])
+    )
+    LinearBiasMHA = partial(lambda w: w.reshape(*w.shape[:-2], -1))
+    Other = partial(lambda w: w)
+
+    def __init__(self, fn):
+        self.transformation = fn
+
+
+@dataclass
+class Param:
+    param: Union[torch.Tensor, List[torch.Tensor]]
+    param_type: ParamType = ParamType.Other
+    stacked: bool = False
+
+
+def LinearWeight(l, already_transpose_weights=False):
+    if already_transpose_weights is True:
+        return (Param(l))
+    return (Param(l, param_type=ParamType.LinearWeight))
+
+
+def LinearWeightMHA(l, already_transpose_weights=False):
+    if already_transpose_weights is True:
+        return (Param(l, param_type=ParamType.LinearWeightNoTransposeMHA))
+    return (Param(l, param_type=ParamType.LinearWeightMHA))
+
+
+def LinearBiasMHA(b): return (Param(b, param_type=ParamType.LinearBiasMHA))
+
+
+def LinearParams(l, use_bias=False, already_transpose_weights=False):
+    d = {"weights": LinearWeight(l.weight, already_transpose_weights)}
+
+    if use_bias:
+        d["bias"] = Param(l.bias)
+
+    return d
+
+
+def LinearHMAParams(l, use_bias=False, already_transpose_weights=False):
+    d = {"weights": LinearWeightMHA(l.weight, already_transpose_weights)}
+
+    if use_bias:
+        d["bias"] = LinearBiasMHA(l.bias)
+    return d
+
+
+def LayerNormParams(l): return {
+    "scale": Param(l.weight),
+    "offset": Param(l.bias),
+}
+
+
+def TriMulParams(tri_mul): return {
+    "left_norm_input": LayerNormParams(tri_mul.left_norm_input),
+    "projection": LinearParams(tri_mul.projection),
+    "gate": LinearParams(tri_mul.gate),
+    "center_norm": LayerNormParams(tri_mul.center_norm),
+    "output_projection": LinearParams(tri_mul.output_projection),
+    "gating_linear": LinearParams(tri_mul.gating_linear)
+}
+
+
+def GridSelfAttentionParams(pair_attention): return {
+    "act_norm": LayerNormParams(pair_attention.act_norm),
+    "pair_bias_projection": LinearParams(pair_attention.pair_bias_projection),
+    "q_projection": LinearHMAParams(pair_attention.q_projection, already_transpose_weights=True),
+    "k_projection": LinearHMAParams(pair_attention.k_projection, already_transpose_weights=True),
+    "v_projection": LinearHMAParams(pair_attention.v_projection),
+    "gating_query": LinearParams(pair_attention.gating_query, already_transpose_weights=True),
+    "output_projection": LinearParams(pair_attention.output_projection),
+}
+
+
+def AttentionPairBiasParams(single_attention, use_single_cond=False):
+    d = {
+        "q_projection": LinearHMAParams(single_attention.q_projection, use_bias=True),
+        "k_projection": LinearHMAParams(single_attention.k_projection),
+        "v_projection": LinearHMAParams(single_attention.v_projection),
+        "gating_query": LinearParams(single_attention.gating_query),
+        "transition2": LinearParams(single_attention.transition2),
+    }
+
+    if use_single_cond is False:
+        d.update({
+            "layer_norm": LayerNormParams(single_attention.layer_norm),
+        })
+
+    return d
+
+
+def cat_params(params, prefix):
+    return {
+        f"{prefix}{k}": v
+        for k, v in params.items()
+    }
+
+
+def OuterProductMeanParams(outer_product_mean): return {
+    "layer_norm_input": LayerNormParams(outer_product_mean.layer_norm_input),
+    "left_projection": LinearParams(outer_product_mean.left_projection),
+    "right_projection": LinearParams(outer_product_mean.right_projection),
+    "output_w": Param(outer_product_mean.output_w),
+    "output_b": Param(outer_product_mean.output_b),
+}
+
+
+def MSAAttentionParams(msa_attention): return {
+    "act_norm": LayerNormParams(msa_attention.act_norm),
+    "pair_norm": LayerNormParams(msa_attention.pair_norm),
+    "pair_logits": LinearParams(msa_attention.pair_logits),
+    "v_projection": LinearHMAParams(msa_attention.v_projection),
+    "gating_query": LinearParams(msa_attention.gating_query),
+    "output_projection": LinearParams(msa_attention.output_projection),
+}
+
+
+def TransitionParams(transition): return {
+    "input_layer_norm": LayerNormParams(transition.input_layer_norm),
+    "transition1": LinearParams(transition.transition1),
+    "transition2": LinearParams(transition.transition2),
+}
+
+
+def PairformerBlockParams(b, with_single=False):
+    d = {
+        "triangle_multiplication_outgoing": TriMulParams(b.triangle_multiplication_outgoing),
+        "triangle_multiplication_incoming": TriMulParams(b.triangle_multiplication_incoming),
+        "pair_attention1": GridSelfAttentionParams(b.pair_attention1),
+        "pair_attention2": GridSelfAttentionParams(b.pair_attention2),
+        "pair_transition": TransitionParams(b.pair_transition),
+    }
+
+    if with_single is True:
+        d.update({
+            "single_pair_logits_norm": LayerNormParams(b.single_pair_logits_norm),
+            "single_pair_logits_projection": LinearParams(b.single_pair_logits_projection),
+            **cat_params(AttentionPairBiasParams(b.single_attention_), "single_attention_"),
+            "single_transition": TransitionParams(b.single_transition),
+        })
+
+    return d
+
+
+def EvoformerBlockParams(b): return {
+    "outer_product_mean": OuterProductMeanParams(b.outer_product_mean),
+    "msa_attention1": MSAAttentionParams(b.msa_attention1),
+    "msa_transition": TransitionParams(b.msa_transition),
+    "triangle_multiplication_outgoing": TriMulParams(b.triangle_multiplication_outgoing),
+    "triangle_multiplication_incoming": TriMulParams(b.triangle_multiplication_incoming),
+    "pair_attention1": GridSelfAttentionParams(b.pair_attention1),
+    "pair_attention2": GridSelfAttentionParams(b.pair_attention2),
+    "pair_transition": TransitionParams(b.pair_transition),
+}
+
+
+def ConfidenceHeadParams(head):
+
+    pairformer_blocks_params = stacked(
+        [PairformerBlockParams(b, with_single=True) for b in head.confidence_pairformer])
+
+    d = {
+        "~_embed_features/left_target_feat_project": LinearParams(head.left_target_feat_project),
+        "~_embed_features/right_target_feat_project": LinearParams(head.right_target_feat_project),
+        "~_embed_features/distogram_feat_project": LinearParams(head.distogram_feat_project),
+        "__layer_stack_no_per_layer/confidence_pairformer": pairformer_blocks_params,
+        "logits_ln": LayerNormParams(head.logits_ln),
+        "left_half_distance_logits": LinearParams(head.left_half_distance_logits),
+        "pae_logits_ln": LayerNormParams(head.pae_logits_ln),
+        "pae_logits": LinearParams(head.pae_logits),
+        "plddt_logits_ln": LayerNormParams(head.plddt_logits_ln),
+        "plddt_logits": LinearHMAParams(head.plddt_logits),
+        "experimentally_resolved_ln": LayerNormParams(head.experimentally_resolved_ln),
+        "experimentally_resolved_logits": LinearHMAParams(head.experimentally_resolved_logits),
+    }
+
+    return d

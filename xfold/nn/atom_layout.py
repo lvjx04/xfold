@@ -6,6 +6,207 @@ import torch
 
 
 @dataclasses.dataclass(frozen=True)
+class AtomLayout:
+    """Atom layout in a fixed shape (usually 1-dim or 2-dim).
+
+    Examples for atom layouts are atom37, atom14, and similar.
+    All members are np.ndarrays with the same shape, e.g.
+    - [num_atoms]
+    - [num_residues, max_atoms_per_residue]
+    - [num_fragments, max_fragments_per_residue]
+    All string arrays should have dtype=object to avoid pitfalls with Numpy's
+    fixed-size strings
+
+    Attributes:
+      atom_name: np.ndarray of str: atom names (e.g. 'CA', 'NE2'), padding
+        elements have an empty string (''), None or any other value, that maps to
+        False for .astype(bool). mmCIF field: _atom_site.label_atom_id.
+      res_id: np.ndarray of int: residue index (usually starting from 1) padding
+        elements can have an arbitrary value. mmCIF field:
+        _atom_site.label_seq_id.
+      chain_id: np.ndarray of str: chain names (e.g. 'A', 'B') padding elements
+        can have an arbitrary value. mmCIF field: _atom_site.label_seq_id.
+      atom_element: np.ndarray of str: atom elements (e.g. 'C', 'N', 'O'), padding
+        elements have an empty string (''), None or any other value, that maps to
+        False for .astype(bool). mmCIF field: _atom_site.type_symbol.
+      res_name: np.ndarray of str: residue names (e.g. 'ARG', 'TRP') padding
+        elements can have an arbitrary value. mmCIF field:
+        _atom_site.label_comp_id.
+      chain_type: np.ndarray of str: chain types (e.g. 'polypeptide(L)'). padding
+        elements can have an arbitrary value. mmCIF field: _entity_poly.type OR
+        _entity.type (for non-polymers).
+      shape: shape of the layout (just returns atom_name.shape)
+    """
+
+    atom_name: np.ndarray
+    res_id: np.ndarray
+    chain_id: np.ndarray
+    atom_element: np.ndarray | None = None
+    res_name: np.ndarray | None = None
+    chain_type: np.ndarray | None = None
+
+    def __post_init__(self):
+        """Assert all arrays have the same shape."""
+        attribute_names = (
+            'atom_name',
+            'atom_element',
+            'res_name',
+            'res_id',
+            'chain_id',
+            'chain_type',
+        )
+        _assert_all_arrays_have_same_shape(
+            obj=self,
+            expected_shape=self.atom_name.shape,
+            attribute_names=attribute_names,
+        )
+        # atom_name must have dtype object, such that we can convert it to bool to
+        # obtain the mask
+        if self.atom_name.dtype != object:
+            raise ValueError(
+                'atom_name must have dtype object, such that it can '
+                'be converted converted to bool to obtain the mask'
+            )
+
+    def __getitem__(self, key: NumpyIndex) -> 'AtomLayout':
+        return AtomLayout(
+            atom_name=self.atom_name[key],
+            res_id=self.res_id[key],
+            chain_id=self.chain_id[key],
+            atom_element=(
+                self.atom_element[key] if self.atom_element is not None else None
+            ),
+            res_name=(self.res_name[key]
+                      if self.res_name is not None else None),
+            chain_type=(
+                self.chain_type[key] if self.chain_type is not None else None
+            ),
+        )
+
+    def __eq__(self, other: 'AtomLayout') -> bool:
+        if not np.array_equal(self.atom_name, other.atom_name):
+            return False
+
+        mask = self.atom_name.astype(bool)
+        # Check essential fields.
+        for field in ('res_id', 'chain_id'):
+            my_arr = getattr(self, field)
+            other_arr = getattr(other, field)
+            if not np.array_equal(my_arr[mask], other_arr[mask]):
+                return False
+
+        # Check optional fields.
+        for field in ('atom_element', 'res_name', 'chain_type'):
+            my_arr = getattr(self, field)
+            other_arr = getattr(other, field)
+            if (
+                my_arr is not None
+                and other_arr is not None
+                and not np.array_equal(my_arr[mask], other_arr[mask])
+            ):
+                return False
+
+        return True
+
+    def copy_and_pad_to(self, shape: tuple[int, ...]) -> 'AtomLayout':
+        """Copies and pads the layout to the requested shape.
+
+        Args:
+          shape: new shape for the atom layout
+
+        Returns:
+          a copy of the atom layout padded to the requested shape
+
+        Raises:
+          ValueError: incompatible shapes.
+        """
+        if len(shape) != len(self.atom_name.shape):
+            raise ValueError(
+                f'Incompatible shape {shape}. Current layout has shape {self.shape}.'
+            )
+        if any(new < old for old, new in zip(self.atom_name.shape, shape)):
+            raise ValueError(
+                "Can't pad to a smaller shape. Current layout has shape "
+                f'{self.shape} and you requested shape {shape}.'
+            )
+        pad_width = [
+            (0, new - old) for old, new in zip(self.atom_name.shape, shape)
+        ]
+        pad_val = np.array('', dtype=object)
+        return AtomLayout(
+            atom_name=np.pad(self.atom_name, pad_width,
+                             constant_values=pad_val),
+            res_id=np.pad(self.res_id, pad_width, constant_values=0),
+            chain_id=np.pad(self.chain_id, pad_width, constant_values=pad_val),
+            atom_element=(
+                np.pad(self.atom_element, pad_width, constant_values=pad_val)
+                if self.atom_element is not None
+                else None
+            ),
+            res_name=(
+                np.pad(self.res_name, pad_width, constant_values=pad_val)
+                if self.res_name is not None
+                else None
+            ),
+            chain_type=(
+                np.pad(self.chain_type, pad_width, constant_values=pad_val)
+                if self.chain_type is not None
+                else None
+            ),
+        )
+
+    def to_array(self) -> np.ndarray:
+        """Stacks the fields to a numpy array with shape (6, <layout_shape>).
+
+        Creates a pure numpy array of type `object` by stacking the 6 fields of the
+        AtomLayout, i.e. (atom_name, atom_element, res_name, res_id, chain_id,
+        chain_type). This method together with from_array() provides an easy way to
+        apply pure numpy methods like np.concatenate() to `AtomLayout`s.
+
+        Returns:
+          np.ndarray of object with shape (6, <layout_shape>), e.g.
+          array([['N', 'CA', 'C', ..., 'CB', 'CG', 'CD'],
+           ['N', 'C', 'C', ..., 'C', 'C', 'C'],
+           ['LEU', 'LEU', 'LEU', ..., 'PRO', 'PRO', 'PRO'],
+           [1, 1, 1, ..., 403, 403, 403],
+           ['A', 'A', 'A', ..., 'D', 'D', 'D'],
+           ['polypeptide(L)', 'polypeptide(L)', ..., 'polypeptide(L)']],
+          dtype=object)
+        """
+        if (
+            self.atom_element is None
+            or self.res_name is None
+            or self.chain_type is None
+        ):
+            raise ValueError('All optional fields need to be present.')
+
+        return np.stack(dataclasses.astuple(self), axis=0)
+
+    @classmethod
+    def from_array(cls, arr: np.ndarray) -> 'AtomLayout':
+        """Creates an AtomLayout object from a numpy array with shape (6, ...).
+
+        see also to_array()
+        Args:
+          arr: np.ndarray of object with shape (6, <layout_shape>)
+
+        Returns:
+          AtomLayout object with shape (<layout_shape>)
+        """
+        if arr.shape[0] != 6:
+            raise ValueError(
+                'Given array must have shape (6, ...) to match the 6 fields of '
+                'AtomLayout (atom_name, atom_element, res_name, res_id, chain_id, '
+                f'chain_type). Your array has {arr.shape=}'
+            )
+        return cls(*arr)
+
+    @property
+    def shape(self) -> tuple[int, ...]:
+        return self.atom_name.shape
+
+
+@dataclasses.dataclass(frozen=True)
 class GatherInfo:
     """Gather indices to translate from one atom layout to another.
 

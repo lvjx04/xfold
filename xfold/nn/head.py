@@ -76,6 +76,16 @@ class ConfidenceHead(nn.Module):
 
         self.dgram_features_config = template.DistogramFeaturesConfig()
 
+        self.num_bins = 64
+        self.max_error_bin = 31.0
+
+        self.pae_num_bins = 64
+        self.pae_max_error_bin = 31.0
+
+        self.num_plddt_bins = 50
+        self.num_atom = atom_types.DENSE_ATOM_NUM
+        self.bin_width = 1.0 / self.num_plddt_bins
+
         self.left_target_feat_project = nn.Linear(
             self.c_target_feat, self.c_pair, bias=False)
         self.right_target_feat_project = nn.Linear(
@@ -91,11 +101,34 @@ class ConfidenceHead(nn.Module):
             ) for _ in range(n_pairformer_layers)
         ])
 
-        self.num_plddt_bins = 50
-        self.num_atom = atom_types.DENSE_ATOM_NUM
-        self.bin_width = 1.0 / self.num_plddt_bins
+        self.logits_ln = nn.LayerNorm(self.c_pair)
+        self.left_half_distance_logits = nn.Linear(
+            self.c_pair, self.num_bins, bias=False)
 
-        self.register_buffer('bin_centers', torch.arange(
+        self.register_buffer('distance_breaks', torch.linspace(
+            0.0, self.max_error_bin, self.num_bins - 1))
+        self.register_buffer(
+            'step', self.distance_breaks[1] - self.distance_breaks[0])
+        self.register_buffer(
+            'bin_centers', self.distance_breaks + self.step / 2)
+        self.bin_centers = torch.concatenate(
+            [self.bin_centers, self.bin_centers[-1:] + self.step], dim=0
+        )
+
+        self.pae_logits_ln = nn.LayerNorm(self.c_pair)
+        self.pae_logits = nn.Linear(self.c_pair, self.pae_num_bins, bias=False)
+
+        self.register_buffer('pae_breaks', torch.linspace(
+            0.0, self.pae_max_error_bin, self.pae_num_bins - 1))
+        self.register_buffer(
+            'pae_step', self.pae_breaks[1] - self.pae_breaks[0])
+        self.register_buffer(
+            'pae_bin_centers', self.pae_breaks + self.pae_step / 2)
+        self.pae_bin_centers = torch.concatenate(
+            [self.pae_bin_centers, self.pae_bin_centers[-1:] + self.pae_step], dim=0
+        )
+
+        self.register_buffer('plddt_bin_centers', torch.arange(
             0.5 * self.bin_width, 1.0, self.bin_width))
 
         self.plddt_logits_ln = nn.LayerNorm(self.c_single)
@@ -137,10 +170,12 @@ class ConfidenceHead(nn.Module):
         self,
         target_feat: torch.Tensor,
         single: torch.Tensor,
+        seq_mask: torch.Tensor,
         pair: torch.Tensor,
         pair_mask: torch.Tensor,
         dense_atom_positions: torch.Tensor,
-        token_atoms_to_pseudo_beta: atom_layout.GatherInfo
+        token_atoms_to_pseudo_beta: atom_layout.GatherInfo,
+        asym_id: torch.Tensor
     ) -> dict[str, torch.Tensor]:
         """
         Args:
@@ -152,19 +187,66 @@ class ConfidenceHead(nn.Module):
                 [..., N_token, N_token]
             token_atoms_to_pseudo_beta (atom_layout.GatherInfo): Pseudo beta info for atom tokens.
         """
+        import pdb; pdb.set_trace()
         pair += self._embed_features(
             dense_atom_positions, token_atoms_to_pseudo_beta, pair_mask, target_feat)
 
         # pairformer stack
-        pair, single = self.confidence_pairformer(
-            pair, single, pair_mask=pair_mask)
+        for layer in self.confidence_pairformer:
+            pair, single = layer(
+                pair, pair_mask, single, seq_mask)
+
+        # Produce logits to predict a distogram of pairwise distance errors
+        # between the input prediction and the ground truth.
+
+        left_distance_logits = self.left_half_distance_logits(
+            self.logits_ln(pair))
+        right_distance_logits = left_distance_logits
+        distance_logits = left_distance_logits + \
+            torch.transpose(right_distance_logits, -2, -3)
+
+        distance_probs = torch.softmax(distance_logits, dim=-1)
+        pred_distance_error = (
+            torch.sum(distance_probs * self.bin_centers, dim=-1) * pair_mask
+        )
+        average_pred_distance_error = torch.sum(
+            pred_distance_error, dim=[-2, -1]
+        ) / torch.sum(pair_mask, dim=[-2, -1])
+
+        # Predicted aligned error
+        pae_outputs = {}
+        pae_logits = self.pae_logits(self.pae_logits_ln(pair))
+        pae_probs = torch.softmax(pae_logits, dim=-1)
+
+        pair_mask_bool = pair_mask.to(dtype=torch.bool)
+
+        pae = torch.sum(pae_probs * self.pae_bin_centers,
+                        dim=-1) * pair_mask_bool
+        pae_outputs.update({
+            'full_pae': pae,
+        })
+
+        tmscore_adjusted_pae_global, tmscore_adjusted_pae_interface = (
+            self._get_tmscore_adjusted_pae(
+                asym_id=asym_id,
+                seq_mask=seq_mask,
+                pair_mask=pair_mask_bool,
+                bin_centers=self.pae_bin_centers,
+                pae_probs=pae_probs,
+            )
+        )
+
+        pae_outputs.update({
+            'tmscore_adjusted_pae_global': tmscore_adjusted_pae_global,
+            'tmscore_adjusted_pae_interface': tmscore_adjusted_pae_interface,
+        })
 
         # pLDDT
         plddt_logits = self.plddt_logits(self.plddt_logits_ln(single))
         plddt_logits = einops.rearrange(
             plddt_logits, '... (n_atom n_bins) -> ... n_atom n_bins', n_bins=self.num_plddt_bins)
         predicted_lddt = torch.sum(
-            torch.softmax(plddt_logits, dim=-1) * self.bin_centers, dim=-1
+            torch.softmax(plddt_logits, dim=-1) * self.plddt_bin_centers, dim=-1
         )
         predicted_lddt = predicted_lddt * 100.0
 
@@ -178,7 +260,65 @@ class ConfidenceHead(nn.Module):
             experimentally_resolved_logits, dim=-1
         )[..., 1]
 
+        import pdb; pdb.set_trace()
+
         return {
             'predicted_lddt': predicted_lddt,
             'predicted_experimentally_resolved': predicted_experimentally_resolved,
+            'full_pde': pred_distance_error,
+            'average_pde': average_pred_distance_error,
+            **pae_outputs,
         }
+
+    def _get_tmscore_adjusted_pae(self,
+                                  asym_id: torch.Tensor,
+                                  seq_mask: torch.Tensor,
+                                  pair_mask: torch.Tensor,
+                                  bin_centers: torch.Tensor,
+                                  pae_probs: torch.Tensor,
+                                  ):
+
+        def get_tmscore_adjusted_pae(num_interface_tokens, bin_centers, pae_probs):
+            # Clip to avoid negative/undefined d0.
+            clipped_num_res = torch.maximum(num_interface_tokens, torch.tensor(
+                19, device=num_interface_tokens.device))
+
+            # Compute d_0(num_res) as defined by TM-score, eqn. (5) in
+            # http://zhanglab.ccmb.med.umich.edu/papers/2004_3.pdf
+            # Yang & Skolnick "Scoring function for automated
+            # assessment of protein structure template quality" 2004.
+            d0 = 1.24 * (clipped_num_res - 15) ** (1.0 / 3) - 1.8
+
+            # Make compatible with [num_tokens, num_tokens, num_bins]
+            d0 = d0[:, :, None]
+            bin_centers = bin_centers[None, None, :]
+
+            # TM-Score term for every bin.
+            tm_per_bin = 1.0 / \
+                (1 + torch.square(bin_centers) / torch.square(d0))
+            # E_distances tm(distance).
+            predicted_tm_term = torch.sum(pae_probs * tm_per_bin, dim=-1)
+            return predicted_tm_term
+
+        # Interface version
+        x = asym_id[None, :] == asym_id[:, None]
+        num_chain_tokens = torch.sum(x * pair_mask, dim=-1, dtype=torch.int32)
+        num_interface_tokens = num_chain_tokens[None,
+                                                :] + num_chain_tokens[:, None]
+        # Don't double-count within a single chain
+        num_interface_tokens -= x * (num_interface_tokens // 2)
+        num_interface_tokens = num_interface_tokens * pair_mask
+
+        num_global_tokens = torch.full(
+            size=pair_mask.shape, fill_value=seq_mask.sum(), dtype=torch.int32
+        )
+
+        assert num_global_tokens.dtype == torch.int32
+        assert num_interface_tokens.dtype == torch.int32
+        global_apae = get_tmscore_adjusted_pae(
+            num_global_tokens, bin_centers, pae_probs
+        )
+        interface_apae = get_tmscore_adjusted_pae(
+            num_interface_tokens, bin_centers, pae_probs
+        )
+        return global_apae, interface_apae

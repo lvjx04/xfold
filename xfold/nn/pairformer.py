@@ -3,9 +3,9 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
-from xfold.nn.primitives import Transition
+from xfold.nn.primitives import Transition, OuterProductMean
 from xfold.nn.triangle_multiplication import TriangleMultiplication
-from xfold.nn.attention import GridSelfAttention, AttentionPairBias
+from xfold.nn.attention import GridSelfAttention, AttentionPairBias, MSAAttention
 
 
 class PairformerBlock(nn.Module):
@@ -78,8 +78,8 @@ class PairformerBlock(nn.Module):
         pair += self.triangle_multiplication_incoming(pair, mask=pair_mask)
         pair += self.pair_attention1(pair, mask=pair_mask)
         pair += self.pair_attention2(pair, mask=pair_mask)
-
         pair += self.pair_transition(pair)
+
         if self.with_single is True:
             pair_logits = self.single_pair_logits_projection(
                 self.single_pair_logits_norm(pair))
@@ -93,3 +93,45 @@ class PairformerBlock(nn.Module):
             single += self.single_transition(single)
             return pair, single
         return pair
+
+
+class EvoformerBlock(nn.Module):
+    def __init__(self, c_msa: int = 64, c_pair: int = 128, n_heads_pair: int = 4) -> None:
+        super(EvoformerBlock, self).__init__()
+
+        self.outer_product_mean = OuterProductMean(
+            c_msa=c_msa, num_output_channel=c_pair)
+        self.msa_attention1 = MSAAttention(c_msa=c_msa, c_pair=c_pair)
+        self.msa_transition = Transition(c_in=c_msa)
+
+        self.triangle_multiplication_outgoing = TriangleMultiplication(
+            c_pair=128, c_hidden=128, _outgoing=True)
+        self.triangle_multiplication_incoming = TriangleMultiplication(
+            c_pair=128, c_hidden=128, _outgoing=False)
+        self.pair_attention1 = GridSelfAttention(
+            c_pair=c_pair, num_head=n_heads_pair, transpose=False
+        )
+        self.pair_attention2 = GridSelfAttention(
+            c_pair=c_pair, num_head=n_heads_pair, transpose=True
+        )
+        self.pair_transition = Transition(c_in=c_pair)
+
+    def forward(
+        self,
+        msa: torch.Tensor,
+        pair: torch.Tensor,
+        msa_mask: torch.Tensor,
+        pair_mask: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        pair += self.outer_product_mean(msa, msa_mask)
+
+        msa += self.msa_attention1(msa, msa_mask, pair)
+        msa += self.msa_transition(msa)
+
+        pair += self.triangle_multiplication_outgoing(pair, mask=pair_mask)
+        pair += self.triangle_multiplication_incoming(pair, mask=pair_mask)
+        pair += self.pair_attention1(pair, mask=pair_mask)
+        pair += self.pair_attention2(pair, mask=pair_mask)
+        pair += self.pair_transition(pair)
+
+        return msa, pair

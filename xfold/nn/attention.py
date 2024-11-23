@@ -88,7 +88,7 @@ class GridSelfAttention(nn.Module):
 
 class AttentionPairBias(nn.Module):
     def __init__(self, c_single: int = 384, num_head: int = 16, use_single_cond: bool = False) -> None:
-        super().__init__()
+        super(AttentionPairBias, self).__init__()
 
         self.c_single = c_single
         self.num_head = num_head
@@ -136,3 +136,42 @@ class AttentionPairBias(nn.Module):
         gate_logits = self.gating_query(x)
         weighted_avg *= torch.sigmoid(gate_logits)
         return self.transition2(weighted_avg)
+
+
+class MSAAttention(nn.Module):
+    def __init__(self, c_msa=64, c_pair=128, num_head=8):
+        super(MSAAttention, self).__init__()
+
+        self.c_msa = c_msa
+        self.c_pair = c_pair
+        self.num_head = num_head
+
+        self.value_dim = self.c_msa // self.num_head
+
+        self.act_norm = nn.LayerNorm(self.c_msa)
+        self.pair_norm = nn.LayerNorm(self.c_pair)
+        self.pair_logits = nn.Linear(self.c_pair, self.num_head, bias=False)
+        self.v_projection = nn.Linear(
+            self.c_msa, self.num_head * self.value_dim, bias=False)
+        self.gating_query = nn.Linear(self.c_msa, self.c_msa, bias=False)
+        self.output_projection = nn.Linear(self.c_msa, self.c_msa, bias=False)
+
+    def forward(self, msa, msa_mask, pair):
+        msa = self.act_norm(msa)
+        pair = self.pair_norm(pair)
+        logits = self.pair_logits(pair)
+        logits = logits.permute(2, 0, 1)
+
+        logits += 1e9 * (torch.max(msa_mask, dim=0).values - 1.0)
+        weights = torch.softmax(logits, dim=-1)
+
+        v = self.v_projection(msa)
+        v = einops.rearrange(v, 'b k (h c) -> b k h c', h=self.num_head)
+
+        v_avg = torch.einsum('hqk, bkhc -> bqhc', weights, v)
+        v_avg = torch.reshape(v_avg, v_avg.shape[:-2] + (-1,))
+
+        gate_values = self.gating_query(msa)
+        v_avg *= torch.sigmoid(gate_values)
+
+        return self.output_projection(v_avg)

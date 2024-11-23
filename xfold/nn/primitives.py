@@ -92,3 +92,38 @@ class Transition(nn.Module):
         a, b = torch.chunk(x, 2, dim=-1)
         c = F.silu(a) * b
         return self.transition2(c)
+
+
+class OuterProductMean(nn.Module):
+    def __init__(self, c_msa: int = 64, num_output_channel: int = 128, num_outer_channel: int = 32) -> None:
+        super(OuterProductMean, self).__init__()
+
+        self.c_msa = c_msa
+        self.num_outer_channel = num_outer_channel
+        self.num_output_channel = num_output_channel
+        self.epsilon = 1e-3
+
+        self.layer_norm_input = nn.LayerNorm(self.c_msa)
+        self.left_projection = nn.Linear(
+            self.c_msa, self.num_outer_channel, bias=False)
+        self.right_projection = nn.Linear(
+            self.c_msa, self.num_outer_channel, bias=False)
+
+        self.output_w = nn.Parameter(
+            torch.randn(self.num_outer_channel, self.num_outer_channel, self.num_output_channel))
+        self.output_b = nn.Parameter(
+            torch.randn(self.num_output_channel))
+
+    def forward(self, msa: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        mask = mask.unsqueeze(-1)
+        msa = self.layer_norm_input(msa)
+        left_act = mask * self.left_projection(msa)
+        right_act = mask * self.right_projection(msa)
+
+        left_act = left_act.permute(0, 2, 1)
+        act = torch.einsum('acb,ade->dceb', left_act, right_act)
+        act = torch.einsum('dceb,cef->dbf', act, self.output_w) + self.output_b
+        act = act.permute(1, 0, 2)
+
+        norm = torch.einsum('abc,adc->bdc', mask, mask)
+        return act / (self.epsilon + norm)
