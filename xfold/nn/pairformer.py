@@ -5,7 +5,8 @@ import torch.nn as nn
 
 from xfold.nn.primitives import Transition, OuterProductMean
 from xfold.nn.triangle_multiplication import TriangleMultiplication
-from xfold.nn.attention import GridSelfAttention, AttentionPairBias, MSAAttention
+from xfold.nn.attention import GridSelfAttention, MSAAttention
+from xfold.nn.diffusion_transformer import SelfAttention
 
 
 class PairformerBlock(nn.Module):
@@ -24,7 +25,7 @@ class PairformerBlock(nn.Module):
     ) -> None:
         """
         Args:
-            n_heads (int, optional): number of head [for AttentionPairBias]. Defaults to 16.
+            n_heads (int, optional): number of head [for SelfAttention]. Defaults to 16.
             c_z (int, optional): hidden dim [for pair embedding]. Defaults to 128.
             c_s (int, optional):  hidden dim [for single embedding]. Defaults to 384.
             c_hidden_mul (int, optional): hidden dim [for TriangleMultiplicationOutgoing].
@@ -51,8 +52,8 @@ class PairformerBlock(nn.Module):
             self.single_pair_logits_norm = nn.LayerNorm(c_pair)
             self.single_pair_logits_projection = nn.Linear(
                 c_pair, n_heads, bias=False)
-            self.single_attention_ = AttentionPairBias(
-                c_single=c_single, num_head=n_heads, use_single_cond=False)
+            self.single_attention_ = SelfAttention(
+                c_x=c_single, num_head=n_heads, use_single_cond=False)
             self.single_transition = Transition(c_in=self.c_single)
 
     def forward(

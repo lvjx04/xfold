@@ -280,7 +280,12 @@ def assign(translation_dict, param_to_load):
             weights = torch.as_tensor(param_to_load[k])
             ref, param_type = param.param, param.param_type
             if param.stacked:
-                weights = torch.unbind(weights, 0)
+                if len(ref) == weights.shape[0]:
+                    weights = torch.unbind(weights, 0)
+                # fixme: this is a hack to handle the fact that the 2 level stacked
+                elif len(ref) == weights.shape[0] * weights.shape[1]:
+                    weights = torch.unbind(
+                        weights.reshape(-1, *weights.shape[2:]), 0)
             else:
                 weights = [weights]
                 ref = [ref]
@@ -312,6 +317,13 @@ class ParamType(Enum):
 
     def __init__(self, fn):
         self.transformation = fn
+
+
+def cat_params(params, prefix):
+    return {
+        f"{prefix}{k}": v
+        for k, v in params.items()
+    }
 
 
 @dataclass
@@ -353,10 +365,14 @@ def LinearHMAParams(l, use_bias=False, already_transpose_weights=False):
     return d
 
 
-def LayerNormParams(l): return {
-    "scale": Param(l.weight),
-    "offset": Param(l.bias),
-}
+def LayerNormParams(l, use_bias=True):
+    d = {
+        "scale": Param(l.weight),
+    }
+    if use_bias:
+        d["offset"] = Param(l.bias)
+
+    return d
 
 
 def TriMulParams(tri_mul): return {
@@ -380,28 +396,61 @@ def GridSelfAttentionParams(pair_attention): return {
 }
 
 
-def AttentionPairBiasParams(single_attention, use_single_cond=False):
+def AdaptiveLayerNormParams(aln, use_single_cond=False):
+    if use_single_cond is False:
+        return {
+            "layer_norm": LayerNormParams(aln.layer_norm),
+        }
+    else:
+        return {
+            "single_cond_layer_norm": LayerNormParams(aln.single_cond_layer_norm, use_bias=False),
+            "single_cond_scale": LinearParams(aln.single_cond_scale, use_bias=True),
+            "single_cond_bias": LinearParams(aln.single_cond_bias),
+        }
+
+
+def AdaLNZeroParams(ada_ln_zero, use_single_cond=False):
     d = {
-        "q_projection": LinearHMAParams(single_attention.q_projection, use_bias=True),
-        "k_projection": LinearHMAParams(single_attention.k_projection),
-        "v_projection": LinearHMAParams(single_attention.v_projection),
-        "gating_query": LinearParams(single_attention.gating_query),
-        "transition2": LinearParams(single_attention.transition2),
+        "transition2": LinearParams(ada_ln_zero.transition2),
     }
 
-    if use_single_cond is False:
+    if use_single_cond is True:
         d.update({
-            "layer_norm": LayerNormParams(single_attention.layer_norm),
+            "adaptive_zero_cond": LinearParams(ada_ln_zero.adaptive_zero_cond, use_bias=True),
         })
 
     return d
 
 
-def cat_params(params, prefix):
+def SelfAttentionParams(self_attention, use_single_cond=False):
     return {
-        f"{prefix}{k}": v
-        for k, v in params.items()
+        "q_projection": LinearHMAParams(self_attention.q_projection, use_bias=True),
+        "k_projection": LinearHMAParams(self_attention.k_projection),
+        "v_projection": LinearHMAParams(self_attention.v_projection),
+        "gating_query": LinearParams(self_attention.gating_query),
+        "transition2": LinearParams(self_attention.adaptive_zero_init.transition2),
+        **AdaptiveLayerNormParams(self_attention.adaptive_layernorm, use_single_cond),
+        **AdaLNZeroParams(self_attention.adaptive_zero_init, use_single_cond),
     }
+
+
+def DiffusionTransitionParams(transition, use_single_cond=False):
+    return {
+        **AdaptiveLayerNormParams(transition.adaptive_layernorm, use_single_cond),
+        "transition1": LinearParams(transition.transition1),
+        **AdaLNZeroParams(transition.adaptive_zero_init, use_single_cond),
+    }
+
+
+def CrossAttentionParams(cross_attention): return {
+    **cat_params(AdaptiveLayerNormParams(cross_attention.q_adaptive_layernorm, use_single_cond=True), "q"),
+    **cat_params(AdaptiveLayerNormParams(cross_attention.k_adaptive_layernorm, use_single_cond=True), "k"),
+    "q_projection": LinearHMAParams(cross_attention.q_projection, use_bias=True),
+    "k_projection": LinearHMAParams(cross_attention.k_projection),
+    "v_projection": LinearHMAParams(cross_attention.v_projection),
+    "gating_query": LinearParams(cross_attention.gating_query),
+    **AdaLNZeroParams(cross_attention.adaptive_zero_init, use_single_cond=True),
+}
 
 
 def OuterProductMeanParams(outer_product_mean): return {
@@ -443,7 +492,7 @@ def PairformerBlockParams(b, with_single=False):
         d.update({
             "single_pair_logits_norm": LayerNormParams(b.single_pair_logits_norm),
             "single_pair_logits_projection": LinearParams(b.single_pair_logits_projection),
-            **cat_params(AttentionPairBiasParams(b.single_attention_), "single_attention_"),
+            **cat_params(SelfAttentionParams(b.single_attention_), "single_attention_"),
             "single_transition": TransitionParams(b.single_transition),
         })
 
@@ -467,7 +516,7 @@ def ConfidenceHeadParams(head):
     pairformer_blocks_params = stacked(
         [PairformerBlockParams(b, with_single=True) for b in head.confidence_pairformer])
 
-    d = {
+    return {
         "~_embed_features/left_target_feat_project": LinearParams(head.left_target_feat_project),
         "~_embed_features/right_target_feat_project": LinearParams(head.right_target_feat_project),
         "~_embed_features/distogram_feat_project": LinearParams(head.distogram_feat_project),
@@ -482,4 +531,31 @@ def ConfidenceHeadParams(head):
         "experimentally_resolved_logits": LinearHMAParams(head.experimentally_resolved_logits),
     }
 
-    return d
+
+def DiffusionTransformerParams(transformer):
+
+    self_attention_params = stacked([SelfAttentionParams(
+        l, use_single_cond=True) for l in transformer.self_attention])
+    transistion_params = stacked([DiffusionTransitionParams(
+        l, use_single_cond=True) for l in transformer.transition_block])
+
+    return {
+        "pair_input_layer_norm": LayerNormParams(transformer.pair_input_layer_norm, use_bias=False),
+        "__layer_stack_with_per_layer/pair_logits_projection": stacked([LinearHMAParams(l) for l in transformer.pair_logits_projection]),
+        **cat_params(self_attention_params, "__layer_stack_with_per_layer/__layer_stack_with_per_layer/transformer"),
+        **cat_params(transistion_params, "__layer_stack_with_per_layer/__layer_stack_with_per_layer/transformerffw_"),
+    }
+
+def DiffusionCrossAttTransformerParams(transformer, prefix="diffusion_atom_transformer_encoder"):
+
+    cross_attention_params = stacked([CrossAttentionParams(
+        l) for l in transformer.cross_attention])
+    transistion_params = stacked([DiffusionTransitionParams(
+        l, use_single_cond=True) for l in transformer.transition_block])
+
+    return {
+        "pair_input_layer_norm": LayerNormParams(transformer.pair_input_layer_norm, use_bias=False),
+        "pair_logits_projection": LinearHMAParams(transformer.pair_logits_projection),
+        **cat_params(cross_attention_params, f"__layer_stack_with_per_layer/{prefix}"),
+        **cat_params(transistion_params, f"__layer_stack_with_per_layer/{prefix}ffw_"),
+    }

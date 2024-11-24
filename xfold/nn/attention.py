@@ -86,58 +86,6 @@ class GridSelfAttention(nn.Module):
         return pair
 
 
-class AttentionPairBias(nn.Module):
-    def __init__(self, c_single: int = 384, num_head: int = 16, use_single_cond: bool = False) -> None:
-        super(AttentionPairBias, self).__init__()
-
-        self.c_single = c_single
-        self.num_head = num_head
-
-        self.qkv_dim = self.c_single // self.num_head
-        self.use_single_cond = use_single_cond
-
-        if self.use_single_cond is False:
-            self.layer_norm = nn.LayerNorm(self.c_single)
-
-        self.q_projection = nn.Linear(self.c_single, self.c_single, bias=True)
-        self.k_projection = nn.Linear(self.c_single, self.c_single, bias=False)
-        self.v_projection = nn.Linear(self.c_single, self.c_single, bias=False)
-
-        self.gating_query = nn.Linear(self.c_single, self.c_single, bias=False)
-        self.transition2 = nn.Linear(self.c_single, self.c_single, bias=False)
-
-    def forward(self, x: torch.Tensor, mask: torch.Tensor, pair_logits: Optional[torch.Tensor] = None):
-        """
-        Args:
-            x (torch.Tensor): (num_tokens, ch)
-            mask (torch.Tensor): (num_tokens,)
-            pair_logits (torch.Tensor, optional): (num_heads, num_tokens, num_tokens)
-        """
-        bias = (1e9 * (mask.to(dtype=x.dtype) - 1.0))[..., None, None, :]
-
-        x = self.layer_norm(x)
-
-        q = self.q_projection(x)
-        k = self.k_projection(x)
-        v = self.v_projection(x)
-
-        q, k, v = map(lambda t: einops.rearrange(
-            t, 'n (h c) -> n h c', h=self.num_head), [q, k, v])
-
-        logits = torch.einsum('...qhc,...khc->...hqk',
-                              q * self.qkv_dim ** (-0.5), k) + bias
-        if pair_logits is not None:
-            logits += pair_logits  # (num_heads, seq_len, seq_len)
-
-        weights = torch.softmax(logits, dim=-1)
-        weighted_avg = torch.einsum('...hqk,...khc->...qhc', weights, v)
-        weighted_avg = weighted_avg.reshape(weighted_avg.shape[:-2] + (-1,))
-
-        gate_logits = self.gating_query(x)
-        weighted_avg *= torch.sigmoid(gate_logits)
-        return self.transition2(weighted_avg)
-
-
 class MSAAttention(nn.Module):
     def __init__(self, c_msa=64, c_pair=128, num_head=8):
         super(MSAAttention, self).__init__()
