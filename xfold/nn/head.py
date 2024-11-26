@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import einops
 
+from xfold import feat_batch
 from xfold.constants import atom_types
 from xfold.nn import template, atom_layout, pairformer
 
@@ -39,7 +40,11 @@ class DistogramHead(nn.Module):
 
         self.register_buffer('is_contact_bin', is_contact_bin)
 
-    def forward(self, pair: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self, 
+        batch: feat_batch.Batch,
+        embeddings: dict[str, torch.Tensor]
+    ) -> torch.Tensor:
         """
         Args:
             pair (torch.Tensor): pair embedding
@@ -49,12 +54,18 @@ class DistogramHead(nn.Module):
             torch.Tensor: distogram probability distribution
                 [*, N_token, N_token, num_bins]
         """
-        left_half_logits = self.half_logits(pair)
+
+        pair_act = embeddings['pair']
+        seq_mask = batch.token_features.mask.astype(bool)
+        pair_mask = seq_mask[:, None] * seq_mask[None, :]
+
+        left_half_logits = self.half_logits(pair_act)
         right_half_logits = left_half_logits
         logits = left_half_logits + right_half_logits.transpose(-2, -3)
         probs = torch.softmax(logits, dim=-1)
-        # precision=jax.lax.Precision.HIGHEST
         contact_probs = torch.einsum('ijk,k->ij', probs, self.is_contact_bin)
+
+        contact_probs = pair_mask * contact_probs
 
         return {
             'bin_edges': self.breaks,

@@ -313,6 +313,7 @@ class ParamType(Enum):
         lambda w: w.reshape(-1, w.shape[-1])
     )
     LinearBiasMHA = partial(lambda w: w.reshape(*w.shape[:-2], -1))
+    LinearFlat = partial(lambda w: w.unsqueeze(-1))
     Other = partial(lambda w: w)
 
     def __init__(self, fn):
@@ -357,6 +358,15 @@ def LinearParams(l, use_bias=False, already_transpose_weights=False):
     return d
 
 
+def LinearfromFlatParams(l, use_bias=False):
+    d = {"weights": Param(l.weight, param_type=ParamType.LinearFlat)}
+
+    if use_bias:
+        d["bias"] = Param(l.bias)
+
+    return d
+
+
 def LinearHMAParams(l, use_bias=False, already_transpose_weights=False):
     d = {"weights": LinearWeightMHA(l.weight, already_transpose_weights)}
 
@@ -373,6 +383,29 @@ def LayerNormParams(l, use_bias=True):
         d["offset"] = Param(l.bias)
 
     return d
+
+
+def AtomCrossAttEncoderParams(encoder): return {
+    "embed_ref_pos": LinearParams(encoder.embed_ref_pos),
+    "embed_ref_mask": LinearParams(encoder.embed_ref_mask),
+    "embed_ref_element": LinearParams(encoder.embed_ref_element),
+    "embed_ref_charge": LinearParams(encoder.embed_ref_charge),
+    "embed_ref_atom_name": LinearParams(encoder.embed_ref_atom_name),
+    "single_to_pair_cond_row": LinearParams(encoder.single_to_pair_cond_row),
+    "single_to_pair_cond_col": LinearParams(encoder.single_to_pair_cond_col),
+    "embed_pair_offsets": LinearParams(encoder.embed_pair_offsets),
+    "embed_pair_distances": LinearParams(encoder.embed_pair_distances),
+    "single_to_pair_cond_row_1": LinearParams(encoder.single_to_pair_cond_row_1),
+    "single_to_pair_cond_col_1": LinearParams(encoder.single_to_pair_cond_col_1),
+    "embed_pair_offsets_1": LinearParams(encoder.embed_pair_offsets_1),
+    "embed_pair_distances_1": LinearParams(encoder.embed_pair_distances_1),
+    "embed_pair_offsets_valid": LinearParams(encoder.embed_pair_offsets_valid),
+    "pair_mlp_1": LinearParams(encoder.pair_mlp_1),
+    "pair_mlp_2": LinearParams(encoder.pair_mlp_2),
+    "pair_mlp_3": LinearParams(encoder.pair_mlp_3),
+    "atom_transformer_encoder": DiffusionCrossAttTransformerParams(encoder.atom_transformer_encoder, prefix="evoformer_conditioning_atom_transformer_encoder"),
+    "project_atom_features_for_aggr": LinearParams(encoder.project_atom_features_for_aggr),
+}
 
 
 def TriMulParams(tri_mul): return {
@@ -546,6 +579,7 @@ def DiffusionTransformerParams(transformer):
         **cat_params(transistion_params, "__layer_stack_with_per_layer/__layer_stack_with_per_layer/transformerffw_"),
     }
 
+
 def DiffusionCrossAttTransformerParams(transformer, prefix="diffusion_atom_transformer_encoder"):
 
     cross_attention_params = stacked([CrossAttentionParams(
@@ -559,3 +593,83 @@ def DiffusionCrossAttTransformerParams(transformer, prefix="diffusion_atom_trans
         **cat_params(cross_attention_params, f"__layer_stack_with_per_layer/{prefix}"),
         **cat_params(transistion_params, f"__layer_stack_with_per_layer/{prefix}ffw_"),
     }
+
+
+def TemplateEmbeddingParams(template_embedding):
+
+    pairformer_params = stacked(
+        [PairformerBlockParams(b, with_single=False) for b in template_embedding.single_template_embedding.template_embedding_iteration])
+
+    return {
+        "single_template_embedding/query_embedding_norm": LayerNormParams(template_embedding.single_template_embedding.query_embedding_norm),
+        "single_template_embedding/template_pair_embedding_0": LinearParams(template_embedding.single_template_embedding.template_pair_embedding_0),
+        "single_template_embedding/template_pair_embedding_1": LinearfromFlatParams(template_embedding.single_template_embedding.template_pair_embedding_1),
+        "single_template_embedding/template_pair_embedding_2": LinearParams(template_embedding.single_template_embedding.template_pair_embedding_2),
+        "single_template_embedding/template_pair_embedding_3": LinearParams(template_embedding.single_template_embedding.template_pair_embedding_3),
+        "single_template_embedding/template_pair_embedding_4": LinearfromFlatParams(template_embedding.single_template_embedding.template_pair_embedding_4),
+        "single_template_embedding/template_pair_embedding_5": LinearfromFlatParams(template_embedding.single_template_embedding.template_pair_embedding_5),
+        "single_template_embedding/template_pair_embedding_6": LinearfromFlatParams(template_embedding.single_template_embedding.template_pair_embedding_6),
+        "single_template_embedding/template_pair_embedding_7": LinearfromFlatParams(template_embedding.single_template_embedding.template_pair_embedding_7),
+        "single_template_embedding/template_pair_embedding_8": LinearParams(template_embedding.single_template_embedding.template_pair_embedding_8),
+        **cat_params(pairformer_params, f"single_template_embedding/__layer_stack_no_per_layer/template_embedding_iteration/"),
+        "single_template_embedding/output_layer_norm": LayerNormParams(template_embedding.single_template_embedding.output_layer_norm),
+        "output_linear": LinearParams(template_embedding.output_linear),
+    }
+
+
+def EvoformerParams(evoformer):
+
+    msa_stack_params = stacked(
+        [EvoformerBlockParams(b) for b in evoformer.msa_stack])
+
+    trunk_pairformer_params = stacked(
+        [PairformerBlockParams(b, with_single=True) for b in evoformer.trunk_pairformer])
+
+    return {
+        "left_single": LinearParams(evoformer.left_single),
+        "right_single": LinearParams(evoformer.right_single),
+        "prev_embedding_layer_norm": LayerNormParams(evoformer.prev_embedding_layer_norm),
+        "prev_embedding": LinearParams(evoformer.prev_embedding),
+        "~_relative_encoding/position_activations": LinearParams(evoformer.position_activations),
+        "bond_embedding": LinearParams(evoformer.bond_embedding),
+        "template_embedding": TemplateEmbeddingParams(evoformer.template_embedding),
+        "msa_activations": LinearParams(evoformer.msa_activations),
+        "extra_msa_target_feat": LinearParams(evoformer.extra_msa_target_feat),
+        **cat_params(msa_stack_params, "__layer_stack_no_per_layer/msa_stack/"),
+        "single_activations": LinearParams(evoformer.single_activations),
+        "prev_single_embedding_layer_norm": LayerNormParams(evoformer.prev_single_embedding_layer_norm),
+        "prev_single_embedding": LinearParams(evoformer.prev_single_embedding),
+        **cat_params(trunk_pairformer_params, "__layer_stack_no_per_layer_1/trunk_pairformer/"),
+    }
+
+
+def get_translation_dict(model):
+    translations = {
+        **cat_params(AtomCrossAttEncoderParams(model.evoformer_conditioning), "evoformer_conditioning_"),
+        "evoformer": EvoformerParams(model.evoformer),
+        "distogram_head/half_logits": ConfidenceHeadParams(model.distogram_head.half_logits),
+    }
+
+    return translations
+
+
+def import_jax_weights_(model, npz_path):
+    params = get_alphafold3_params(npz_path)
+
+    translations = get_translation_dict(model)
+
+    flat = _process_translations_dict(translations, _key_prefix="diffuser/")
+
+    keys = list(params.keys())
+    flat_keys = list(flat.keys())
+    incorrect = [k for k in flat_keys if k not in keys]
+
+    for k in flat.keys():
+        if k not in params:
+            print(f"Key {k} not found in params")
+
+    # for k in params.keys():
+    #     if k not in flat:
+    #         print(f"Key {k} not found in torch module")
+
+    assign(flat, params)

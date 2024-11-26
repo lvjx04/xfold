@@ -3,16 +3,14 @@ import torch.nn as nn
 
 
 class TriangleMultiplication(nn.Module):
-    def __init__(self, c_pair: int = 128, c_hidden: int = 128, _outgoing: bool = True) -> None:
+    def __init__(self, c_pair: int = 128, _outgoing: bool = True) -> None:
         super(TriangleMultiplication, self).__init__()
 
         self.c_pair = c_pair
-        self.c_hidden = c_hidden
-
         self.left_norm_input = nn.LayerNorm(self.c_pair)
-        self.projection = nn.Linear(self.c_pair, 2 * self.c_hidden, bias=False)
-        self.gate = nn.Linear(self.c_pair, 2 * self.c_hidden, bias=False)
-        self.center_norm = nn.LayerNorm(self.c_hidden)
+        self.projection = nn.Linear(self.c_pair, 2 * self.c_pair, bias=False)
+        self.gate = nn.Linear(self.c_pair, 2 * self.c_pair, bias=False)
+        self.center_norm = nn.LayerNorm(self.c_pair)
         self.output_projection = nn.Linear(
             self.c_pair, self.c_pair, bias=False)
         self.gating_linear = nn.Linear(self.c_pair, self.c_pair, bias=False)
@@ -42,7 +40,7 @@ class TriangleMultiplication(nn.Module):
         gate = gate.permute(2, 0, 1)
         projection *= torch.sigmoid(gate)
 
-        projection = projection.reshape(self.c_hidden, 2, *projection.shape[1:])
+        projection = projection.reshape(self.c_pair, 2, *projection.shape[1:])
 
         a, b = torch.chunk(projection, 2, dim=1)
         a, b = torch.squeeze(a, dim=1), torch.squeeze(b, dim=1)

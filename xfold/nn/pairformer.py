@@ -21,6 +21,7 @@ class PairformerBlock(nn.Module):
         c_single: int = 384,
         c_hidden_mul: int = 128,
         n_heads_pair: int = 4,
+        num_intermediate_factor: int = 4,
         with_single: bool = True,
     ) -> None:
         """
@@ -35,18 +36,21 @@ class PairformerBlock(nn.Module):
         super(PairformerBlock, self).__init__()
         self.n_heads = n_heads
         self.with_single = with_single
+        self.num_intermediate_factor = num_intermediate_factor
+
         self.triangle_multiplication_outgoing = TriangleMultiplication(
-            c_pair=c_pair, c_hidden=c_hidden_mul, _outgoing=True
+            c_pair=c_pair, _outgoing=True
         )
         self.triangle_multiplication_incoming = TriangleMultiplication(
-            c_pair=c_pair, c_hidden=c_hidden_mul, _outgoing=False)
+            c_pair=c_pair, _outgoing=False)
         self.pair_attention1 = GridSelfAttention(
             c_pair=c_pair, num_head=n_heads_pair, transpose=False
         )
         self.pair_attention2 = GridSelfAttention(
             c_pair=c_pair, num_head=n_heads_pair, transpose=True
         )
-        self.pair_transition = Transition(c_in=c_pair)
+        self.pair_transition = Transition(
+            c_x=c_pair, num_intermediate_factor=self.num_intermediate_factor)
         self.c_single = c_single
         if self.with_single is True:
             self.single_pair_logits_norm = nn.LayerNorm(c_pair)
@@ -54,7 +58,7 @@ class PairformerBlock(nn.Module):
                 c_pair, n_heads, bias=False)
             self.single_attention_ = SelfAttention(
                 c_x=c_single, num_head=n_heads, use_single_cond=False)
-            self.single_transition = Transition(c_in=self.c_single)
+            self.single_transition = Transition(c_x=self.c_single)
 
     def forward(
         self,
@@ -103,19 +107,19 @@ class EvoformerBlock(nn.Module):
         self.outer_product_mean = OuterProductMean(
             c_msa=c_msa, num_output_channel=c_pair)
         self.msa_attention1 = MSAAttention(c_msa=c_msa, c_pair=c_pair)
-        self.msa_transition = Transition(c_in=c_msa)
+        self.msa_transition = Transition(c_x=c_msa)
 
         self.triangle_multiplication_outgoing = TriangleMultiplication(
-            c_pair=128, c_hidden=128, _outgoing=True)
+            c_pair=c_pair, _outgoing=True)
         self.triangle_multiplication_incoming = TriangleMultiplication(
-            c_pair=128, c_hidden=128, _outgoing=False)
+            c_pair=c_pair, _outgoing=False)
         self.pair_attention1 = GridSelfAttention(
             c_pair=c_pair, num_head=n_heads_pair, transpose=False
         )
         self.pair_attention2 = GridSelfAttention(
             c_pair=c_pair, num_head=n_heads_pair, transpose=True
         )
-        self.pair_transition = Transition(c_in=c_pair)
+        self.pair_transition = Transition(c_x=c_pair)
 
     def forward(
         self,
