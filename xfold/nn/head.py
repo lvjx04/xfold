@@ -41,7 +41,7 @@ class DistogramHead(nn.Module):
         self.register_buffer('is_contact_bin', is_contact_bin)
 
     def forward(
-        self, 
+        self,
         batch: feat_batch.Batch,
         embeddings: dict[str, torch.Tensor]
     ) -> torch.Tensor:
@@ -56,7 +56,7 @@ class DistogramHead(nn.Module):
         """
 
         pair_act = embeddings['pair']
-        seq_mask = batch.token_features.mask.astype(bool)
+        seq_mask = batch.token_features.mask.to(dtype=torch.bool)
         pair_mask = seq_mask[:, None] * seq_mask[None, :]
 
         left_half_logits = self.half_logits(pair_act)
@@ -133,10 +133,12 @@ class ConfidenceHead(nn.Module):
             0.0, self.pae_max_error_bin, self.pae_num_bins - 1))
         self.register_buffer(
             'pae_step', self.pae_breaks[1] - self.pae_breaks[0])
+
+        pae_bin_centers_ = self.pae_breaks + self.pae_step / 2
         self.register_buffer(
-            'pae_bin_centers', self.pae_breaks + self.pae_step / 2)
-        self.pae_bin_centers = torch.concatenate(
-            [self.pae_bin_centers, self.pae_bin_centers[-1:] + self.pae_step], dim=0
+            'pae_bin_centers', torch.concatenate(
+                [pae_bin_centers_, pae_bin_centers_[-1:] + self.pae_step], dim=0
+            )
         )
 
         self.register_buffer('plddt_bin_centers', torch.arange(
@@ -179,12 +181,9 @@ class ConfidenceHead(nn.Module):
 
     def forward(
         self,
-        target_feat: torch.Tensor,
-        single: torch.Tensor,
-        seq_mask: torch.Tensor,
-        pair: torch.Tensor,
-        pair_mask: torch.Tensor,
         dense_atom_positions: torch.Tensor,
+        embeddings: dict[str, torch.Tensor],
+        seq_mask: torch.Tensor,
         token_atoms_to_pseudo_beta: atom_layout.GatherInfo,
         asym_id: torch.Tensor
     ) -> dict[str, torch.Tensor]:
@@ -198,20 +197,30 @@ class ConfidenceHead(nn.Module):
                 [..., N_token, N_token]
             token_atoms_to_pseudo_beta (atom_layout.GatherInfo): Pseudo beta info for atom tokens.
         """
-        import pdb; pdb.set_trace()
-        pair += self._embed_features(
+
+        dtype = dense_atom_positions.dtype
+
+        seq_mask_cast = seq_mask.to(dtype=dtype)
+        pair_mask = seq_mask_cast[:, None] * seq_mask_cast[None, :]
+        pair_mask = pair_mask.to(dtype=dtype)
+
+        pair_act = embeddings['pair'].to(dtype=dtype)
+        single_act = embeddings['single'].to(dtype=dtype)
+        target_feat = embeddings['target_feat'].to(dtype=dtype)
+
+        pair_act += self._embed_features(
             dense_atom_positions, token_atoms_to_pseudo_beta, pair_mask, target_feat)
 
         # pairformer stack
         for layer in self.confidence_pairformer:
-            pair, single = layer(
-                pair, pair_mask, single, seq_mask)
+            pair_act, single_act = layer(
+                pair_act, pair_mask, single_act, seq_mask)
 
         # Produce logits to predict a distogram of pairwise distance errors
         # between the input prediction and the ground truth.
 
         left_distance_logits = self.left_half_distance_logits(
-            self.logits_ln(pair))
+            self.logits_ln(pair_act))
         right_distance_logits = left_distance_logits
         distance_logits = left_distance_logits + \
             torch.transpose(right_distance_logits, -2, -3)
@@ -226,7 +235,7 @@ class ConfidenceHead(nn.Module):
 
         # Predicted aligned error
         pae_outputs = {}
-        pae_logits = self.pae_logits(self.pae_logits_ln(pair))
+        pae_logits = self.pae_logits(self.pae_logits_ln(pair_act))
         pae_probs = torch.softmax(pae_logits, dim=-1)
 
         pair_mask_bool = pair_mask.to(dtype=torch.bool)
@@ -253,7 +262,7 @@ class ConfidenceHead(nn.Module):
         })
 
         # pLDDT
-        plddt_logits = self.plddt_logits(self.plddt_logits_ln(single))
+        plddt_logits = self.plddt_logits(self.plddt_logits_ln(single_act))
         plddt_logits = einops.rearrange(
             plddt_logits, '... (n_atom n_bins) -> ... n_atom n_bins', n_bins=self.num_plddt_bins)
         predicted_lddt = torch.sum(
@@ -263,15 +272,13 @@ class ConfidenceHead(nn.Module):
 
         # Experimentally resolved
         experimentally_resolved_logits = self.experimentally_resolved_logits(
-            self.experimentally_resolved_ln(single))
+            self.experimentally_resolved_ln(single_act))
         experimentally_resolved_logits = einops.rearrange(
             experimentally_resolved_logits, '... (n_atom n_bins) -> ... n_atom n_bins', n_bins=2)
 
         predicted_experimentally_resolved = torch.softmax(
             experimentally_resolved_logits, dim=-1
         )[..., 1]
-
-        import pdb; pdb.set_trace()
 
         return {
             'predicted_lddt': predicted_lddt,
@@ -321,7 +328,7 @@ class ConfidenceHead(nn.Module):
         num_interface_tokens = num_interface_tokens * pair_mask
 
         num_global_tokens = torch.full(
-            size=pair_mask.shape, fill_value=seq_mask.sum(), dtype=torch.int32
+            size=pair_mask.shape, fill_value=seq_mask.sum(), dtype=torch.int32, device=x.device
         )
 
         assert num_global_tokens.dtype == torch.int32

@@ -29,7 +29,7 @@ def main():
 
     with torch.inference_mode():
         with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
-            model(batch)
+            result = model(batch)
 
 
 if __name__ == "__main__":

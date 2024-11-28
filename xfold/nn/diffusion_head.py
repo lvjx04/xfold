@@ -2,8 +2,9 @@ import torch
 import torch.nn as nn
 
 from xfold import feat_batch
-from xfold.nn import featurization
+from xfold.nn import featurization, utils
 from xfold.nn.diffusion_transformer import DiffusionTransformer, DiffusionTransition
+from xfold.nn.atom_cross_attention import AtomCrossAttEncoder, AtomCrossAttDecoder
 
 # Carefully measured by averaging multimer training set.
 SIGMA_DATA = 16.0
@@ -15,6 +16,58 @@ def fourier_embeddings(x: torch.Tensor, dim: int) -> torch.Tensor:
     return torch.cos(2 * torch.pi * (x[..., None] * weight + bias))
 
 
+def noise_schedule(t, smin=0.0004, smax=160.0, p=7):
+    return (
+        SIGMA_DATA
+        * (smax ** (1 / p) + t * (smin ** (1 / p) - smax ** (1 / p))) ** p
+    )
+
+
+def random_rotation(device, dtype):
+    # Create a random rotation (Gram-Schmidt orthogonalization of two
+    # random normal vectors)
+    v0, v1 = torch.randn(size=(2, 3), dtype=dtype, device=device)
+    e0 = v0 / torch.maximum(torch.tensor(1e-10,
+                            device=device), torch.linalg.norm(v0))
+    v1 = v1 - e0 * torch.dot(v1, e0)
+    e1 = v1 / torch.maximum(torch.tensor(1e-10,
+                            device=device), torch.linalg.norm(v1))
+    e2 = torch.cross(e0, e1, dim=-1)
+    return torch.stack([e0, e1, e2])
+
+
+def random_augmentation(
+    positions: torch.Tensor,
+    mask: torch.Tensor,
+) -> torch.Tensor:
+    """Apply random rigid augmentation.
+
+    Args:
+      positions: atom positions of shape (<common_axes>, 3)
+      mask: per-atom mask of shape (<common_axes>,)
+
+    Returns:
+      Transformed positions with the same shape as input positions.
+    """
+
+    center = utils.mask_mean(
+        mask[..., None], positions, dim=(-2, -3), keepdim=True, eps=1e-6
+    )
+    rot = random_rotation(device=positions.device, dtype=positions.dtype)
+    translation = torch.randn(
+        size=(3,), dtype=positions.dtype, device=positions.device)
+
+    augmented_positions = (
+        torch.einsum(
+            '...i,ij->...j',
+            positions - center,
+            rot,
+        )
+        + translation
+    )
+    return augmented_positions * mask[..., None]
+
+
 class DiffusionHead(nn.Module):
     def __init__(self):
         super(DiffusionHead, self).__init__()
@@ -22,26 +75,50 @@ class DiffusionHead(nn.Module):
         self.c_act = 768
         self.pair_channel = 128
         self.seq_channel = 384
+
+        self.c_pair_cond_initial = 267
+        self.pair_cond_initial_norm = nn.LayerNorm(
+            self.c_pair_cond_initial, bias=False)
+        self.pair_cond_initial_projection = nn.Linear(
+            self.c_pair_cond_initial, self.pair_channel, bias=False)
+
+        self.pair_transition_0 = DiffusionTransition(
+            self.pair_channel, c_single_cond=None)
+        self.pair_transition_1 = DiffusionTransition(
+            self.pair_channel, c_single_cond=None)
+
+        self.c_single_cond_initial = 831
+        self.single_cond_initial_norm = nn.LayerNorm(
+            self.c_single_cond_initial, bias=False)
+        self.single_cond_initial_projection = nn.Linear(
+            self.c_single_cond_initial, self.seq_channel, bias=False)
+
+        self.c_noise_embedding = 256
+        self.noise_embedding_initial_norm = nn.LayerNorm(
+            self.c_noise_embedding, bias=False)
+        self.noise_embedding_initial_projection = nn.Linear(
+            self.c_noise_embedding, self.seq_channel, bias=False)
+
+        self.single_transition_0 = DiffusionTransition(
+            self.seq_channel, c_single_cond=None)
+        self.single_transition_1 = DiffusionTransition(
+            self.seq_channel, c_single_cond=None)
+
+        self.atom_cross_att_encoder = AtomCrossAttEncoder(per_token_channels=self.c_act,
+                                                          with_token_atoms_act=True,
+                                                          with_trunk_pair_cond=True,
+                                                          with_trunk_single_cond=True)
+
+        self.single_cond_embedding_norm = nn.LayerNorm(
+            self.seq_channel, bias=False)
+        self.single_cond_embedding_projection = nn.Linear(
+            self.seq_channel, self.c_act, bias=False)
+
         self.transformer = DiffusionTransformer()
+
         self.output_norm = nn.LayerNorm(self.c_act, bias=False)
 
-        self.pair_cond_initial_norm = nn.LayerNorm(self.c_act, bias=False)
-        self.pair_cond_initial_projection = nn.Linear(
-            self.c_act, self.pair_channel, bias=False)
-
-        self.pair_transition_0 = DiffusionTransition(self.pair_channel)
-        self.pair_transition_1 = DiffusionTransition(self.pair_channel)
-
-        self.single_cond_initial_norm = nn.LayerNorm(self.c_act, bias=False)
-        self.single_cond_initial_projection = nn.Linear(
-            self.c_act, self.seq_channel, bias=False)
-        
-        self.noise_embedding_initial_norm = nn.LayerNorm(self.c_act, bias=False)
-        self.noise_embedding_initial_projection = nn.Linear(
-            self.c_act, self.seq_channel, bias=False)
-        
-        self.single_transition_0 = DiffusionTransition(self.pair_channel)
-        self.single_transition_1 = DiffusionTransition(self.pair_channel)
+        self.atom_cross_att_decoder = AtomCrossAttDecoder()
 
     def _conditioning(
         self,
@@ -59,7 +136,7 @@ class DiffusionHead(nn.Module):
         features_2d = torch.concatenate([pair_embedding, rel_features], dim=-1)
 
         pair_cond = self.pair_cond_initial_projection(
-            self.pair_cond_initial_norm(single_embedding)
+            self.pair_cond_initial_norm(features_2d)
         )
 
         pair_cond += self.pair_transition_0(pair_cond)
@@ -107,6 +184,33 @@ class DiffusionHead(nn.Module):
         # Position features
         act = positions_noisy * atom_mask[..., None]
         act = act / torch.sqrt(noise_level**2 + SIGMA_DATA**2)
+
+        enc = self.atom_cross_att_encoder(
+            batch=batch,
+            token_atoms_act=act,
+            trunk_single_cond=embeddings['single'],
+            trunk_pair_cond=trunk_pair_cond,
+        )
+        act = enc.token_act
+
+        act += self.single_cond_embedding_projection(
+            self.single_cond_embedding_norm(trunk_single_cond)
+        )
+
+        act = self.transformer(
+            act=act,
+            single_cond=trunk_single_cond,
+            mask=sequence_mask,
+            pair_cond=trunk_pair_cond,
+        )
+        act = self.output_norm(act)
+
+        # (Possibly) atom-granularity decoder
+        position_update = self.atom_cross_att_decoder(
+            batch=batch,
+            token_act=act,
+            enc=enc,
+        )
 
         skip_scaling = SIGMA_DATA**2 / (noise_level**2 + SIGMA_DATA**2)
         out_scaling = (

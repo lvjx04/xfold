@@ -7,6 +7,7 @@ from xfold.nn.pairformer import EvoformerBlock, PairformerBlock
 from xfold.nn.head import DistogramHead, ConfidenceHead
 from xfold.nn.template import TemplateEmbedding
 from xfold.nn import atom_cross_attention
+from xfold.nn import diffusion_head
 
 
 class Evoformer(nn.Module):
@@ -253,10 +254,17 @@ class Evoformer(nn.Module):
 
 
 class AlphaFold3(nn.Module):
-    def __init__(self, num_recycles: int = 10):
+    def __init__(self, num_recycles: int = 10, num_samples: int = 5, diffusion_steps: int = 200):
         super(AlphaFold3, self).__init__()
 
         self.num_recycles = num_recycles
+        self.num_samples = num_samples
+        self.diffusion_steps = diffusion_steps
+
+        self.gamma_0 = 0.8
+        self.gamma_min = 1.0
+        self.noise_scale = 1.003
+        self.step_scale = 1.5
 
         self.evoformer_pair_channel = 128
         self.evoformer_seq_channel = 384
@@ -264,6 +272,8 @@ class AlphaFold3(nn.Module):
         self.evoformer_conditioning = atom_cross_attention.AtomCrossAttEncoder()
 
         self.evoformer = Evoformer()
+
+        self.diffusion_head = diffusion_head.DiffusionHead()
 
         self.distogram_head = DistogramHead()
         self.confidence_head = ConfidenceHead()
@@ -285,12 +295,70 @@ class AlphaFold3(nn.Module):
 
         return target_feat
 
+    def _apply_denoising_step(
+        self,
+        batch: feat_batch.Batch,
+        embeddings: dict[str, torch.Tensor],
+        positions: torch.Tensor,
+        noise_level_prev: torch.Tensor,
+        mask: torch.Tensor,
+        noise_level: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+
+        positions = diffusion_head.random_augmentation(
+            positions=positions, mask=mask
+        )
+
+        gamma = self.gamma_0 * (noise_level > self.gamma_min)
+        t_hat = noise_level_prev * (1 + gamma)
+
+        noise_scale = self.noise_scale * \
+            torch.sqrt(t_hat**2 - noise_level_prev**2)
+        noise = noise_scale * \
+            torch.randn(size=positions.shape, device=noise_scale.device)
+        positions_noisy = positions + noise
+
+        positions_denoised = self.diffusion_head(positions_noisy=positions_noisy,
+                                                 noise_level=t_hat,
+                                                 batch=batch,
+                                                 embeddings=embeddings,
+                                                 use_conditioning=True)
+        grad = (positions_noisy - positions_denoised) / t_hat
+
+        d_t = noise_level - t_hat
+        positions_out = positions_noisy + self.step_scale * d_t * grad
+
+        return positions_out, noise_level
+
     def _sample_diffusion(
         self,
         batch: feat_batch.Batch,
         embeddings: dict[str, torch.Tensor],
     ) -> dict[str, torch.Tensor]:
-        pass
+        """Sample using denoiser on batch."""
+
+        mask = batch.predicted_structure_info.atom_mask
+        num_samples = self.num_samples
+
+        device = mask.device
+
+        noise_levels = diffusion_head.noise_schedule(
+            torch.linspace(0, 1, self.diffusion_steps + 1, device=device))
+
+        positions = torch.randn(
+            (num_samples,) + mask.shape + (3,), device=device)
+        positions *= noise_levels[0]
+
+        noise_level = torch.tile(noise_levels[None, 0], (num_samples,))
+
+        for step_idx in range(self.diffusion_steps):
+            for sample_idx in range(num_samples):
+                positions[sample_idx], noise_level[sample_idx] = self._apply_denoising_step(
+                    batch, embeddings, positions[sample_idx], noise_level[sample_idx], mask, noise_levels[1 + step_idx])
+
+        final_dense_atom_mask = torch.tile(mask[None], (num_samples, 1, 1))
+
+        return {'atom_positions': positions, 'mask': final_dense_atom_mask}
 
     def forward(self, batch: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
         batch = feat_batch.Batch.from_data_dict(batch)
@@ -318,12 +386,25 @@ class AlphaFold3(nn.Module):
 
         samples = self._sample_diffusion(batch, embeddings)
 
-        # confidence_output = self.confidence_head()
+        confidence_output_per_sample = []
+        for sample_dense_atom_position in samples['atom_positions']:
+            confidence_output_per_sample.append(self.confidence_head(
+                dense_atom_positions=sample_dense_atom_position,
+                embeddings=embeddings,
+                seq_mask=batch.token_features.mask,
+                token_atoms_to_pseudo_beta=batch.pseudo_beta_info.token_atoms_to_pseudo_beta,
+                asym_id=batch.token_features.asym_id
+            ))
+
+        confidence_output = {}
+        for key in confidence_output_per_sample[0]:
+            confidence_output[key] = torch.stack(
+                [sample[key] for sample in confidence_output_per_sample], dim=0)
 
         distogram = self.distogram_head(batch, embeddings)
 
         return {
             'diffusion_samples': samples,
             'distogram': distogram,
-            # **confidence_output,
+            **confidence_output,
         }
