@@ -384,6 +384,18 @@ class AlphaFold3(nn.Module):
                 target_feat=target_feat
             )
 
+        import numpy as np
+        embeddings["single"] = np.load(
+            open("/home/svu/e0917621/scratch/xFold/debug/single.npy", "rb"))
+        embeddings["single"] = torch.from_numpy(embeddings["single"]).cuda()
+        embeddings["pair"] = np.load(
+            open("/home/svu/e0917621/scratch/xFold/debug/pair.npy", "rb"))
+        embeddings["pair"] = torch.from_numpy(embeddings["pair"]).cuda()
+        embeddings["target_feat"] = np.load(
+            open("/home/svu/e0917621/scratch/xFold/debug/target_feat.npy", "rb"))
+        embeddings["target_feat"] = torch.frombuffer(
+            embeddings["target_feat"], dtype=torch.bfloat16).view(embeddings["target_feat"].shape).to(dtype=torch.float32).cuda()
+
         samples = self._sample_diffusion(batch, embeddings)
 
         confidence_output_per_sample = []

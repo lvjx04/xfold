@@ -719,16 +719,14 @@ def import_jax_weights_(model, npz_path):
 
     flat = _process_translations_dict(translations, _key_prefix="diffuser/")
 
-    keys = list(params.keys())
-    flat_keys = list(flat.keys())
-    incorrect = [k for k in flat_keys if k not in keys]
-
     for k in flat.keys():
         if k not in params:
             print(f"Key {k} not found in params")
 
-    # for k in params.keys():
-    #     if k not in flat:
-    #         print(f"Key {k} not found in torch module")
+    for k in params.keys():
+        if k not in flat and k != "__meta__/__identifier__":
+            print(f"Key {k} not found in torch module")
 
     assign(flat, params)
+
+    model.__identifier__ = params['__meta__/__identifier__']

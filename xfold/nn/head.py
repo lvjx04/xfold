@@ -211,10 +211,14 @@ class ConfidenceHead(nn.Module):
         pair_act += self._embed_features(
             dense_atom_positions, token_atoms_to_pseudo_beta, pair_mask, target_feat)
 
+        import pdb;pdb.set_trace()
+
         # pairformer stack
         for layer in self.confidence_pairformer:
             pair_act, single_act = layer(
                 pair_act, pair_mask, single_act, seq_mask)
+            
+        import pdb;pdb.set_trace()
 
         # Produce logits to predict a distogram of pairwise distance errors
         # between the input prediction and the ground truth.

@@ -1,6 +1,7 @@
 import os
 
 import torch
+import torch.utils._pytree as pytree
 import numpy as np
 from xfold.alphafold3 import AlphaFold3
 from xfold.params import import_jax_weights_
@@ -30,6 +31,19 @@ def main():
     with torch.inference_mode():
         with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
             result = model(batch)
+            result['__identifier__'] = model.__identifier__.numpy().tobytes()
+
+        result = pytree.tree_map_only(
+            torch.Tensor,
+            lambda x: x.to(
+                dtype=torch.float32) if x.dtype == torch.bfloat16 else x,
+            result,
+        )
+        result = pytree.tree_map_only(
+            torch.Tensor, lambda x: x.cpu().detach().numpy(), result)
+
+    import pdb
+    pdb.set_trace()
 
 
 if __name__ == "__main__":
