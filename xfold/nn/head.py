@@ -204,21 +204,17 @@ class ConfidenceHead(nn.Module):
         pair_mask = seq_mask_cast[:, None] * seq_mask_cast[None, :]
         pair_mask = pair_mask.to(dtype=dtype)
 
-        pair_act = embeddings['pair'].to(dtype=dtype)
-        single_act = embeddings['single'].to(dtype=dtype)
-        target_feat = embeddings['target_feat'].to(dtype=dtype)
+        pair_act = embeddings['pair'].clone().to(dtype=dtype)
+        single_act = embeddings['single'].clone().to(dtype=dtype)
+        target_feat = embeddings['target_feat'].clone().to(dtype=dtype)
 
         pair_act += self._embed_features(
             dense_atom_positions, token_atoms_to_pseudo_beta, pair_mask, target_feat)
-
-        import pdb;pdb.set_trace()
 
         # pairformer stack
         for layer in self.confidence_pairformer:
             pair_act, single_act = layer(
                 pair_act, pair_mask, single_act, seq_mask)
-            
-        import pdb;pdb.set_trace()
 
         # Produce logits to predict a distogram of pairwise distance errors
         # between the input prediction and the ground truth.

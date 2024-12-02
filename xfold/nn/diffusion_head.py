@@ -1,3 +1,4 @@
+import numpy as np
 import torch
 import torch.nn as nn
 
@@ -10,10 +11,17 @@ from xfold.nn.atom_cross_attention import AtomCrossAttEncoder, AtomCrossAttDecod
 SIGMA_DATA = 16.0
 
 
-def fourier_embeddings(x: torch.Tensor, dim: int) -> torch.Tensor:
-    weight = torch.randn([dim], dtype=x.dtype, device=x.device)
-    bias = torch.rand([dim], dtype=x.dtype, device=x.device)
-    return torch.cos(2 * torch.pi * (x[..., None] * weight + bias))
+class FourierEmbeddings(nn.Module):
+    def __init__(self, dim: int):
+        super(FourierEmbeddings, self).__init__()
+        self.dim = dim
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+
+        if not hasattr(self, "weight") or not hasattr(self, "bias"):
+            raise RuntimeError("FourierEmbeddings not initialized")            
+
+        return torch.cos(2 * torch.pi * (x[..., None] * self.weight + self.bias))
 
 
 def noise_schedule(t, smin=0.0004, smax=160.0, p=7):
@@ -120,6 +128,8 @@ class DiffusionHead(nn.Module):
 
         self.atom_cross_att_decoder = AtomCrossAttDecoder()
 
+        self.fourier_embeddings = FourierEmbeddings(dim=256)
+
     def _conditioning(
         self,
         batch,
@@ -148,8 +158,8 @@ class DiffusionHead(nn.Module):
         single_cond = self.single_cond_initial_projection(
             self.single_cond_initial_norm(features_1d))
 
-        noise_embedding = fourier_embeddings(
-            (1 / 4) * torch.log(noise_level / SIGMA_DATA), dim=256
+        noise_embedding = self.fourier_embeddings(
+            (1 / 4) * torch.log(noise_level / SIGMA_DATA)
         )
 
         single_cond += self.noise_embedding_initial_projection(

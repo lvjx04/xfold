@@ -212,13 +212,13 @@ def select_model_files(
     raise FileNotFoundError(f'No models matched in {model_dir}')
 
 
-def get_alphafold3_params(checkpoint_path: str):
+def get_alphafold3_params(checkpoint_path: pathlib.Path):
     if not os.path.exists(checkpoint_path):
         raise Exception(
             f"Given checkpoint path not exist [{checkpoint_path}]")
     print(f"Loading from {checkpoint_path}")
     is_compressed = False
-    if checkpoint_path.endswith(".zst"):
+    if checkpoint_path.suffix == ".zst":
         is_compressed = True
     params = {}
     with open_for_reading([pathlib.Path(checkpoint_path)], is_compressed) as stream:
@@ -712,8 +712,8 @@ def get_translation_dict(model):
     return translations
 
 
-def import_jax_weights_(model, npz_path):
-    params = get_alphafold3_params(npz_path)
+def import_jax_weights_(model, model_path: pathlib.Path):
+    params = get_alphafold3_params(model_path / "af3.bin.zst")
 
     translations = get_translation_dict(model)
 
@@ -730,3 +730,14 @@ def import_jax_weights_(model, npz_path):
     assign(flat, params)
 
     model.__identifier__ = params['__meta__/__identifier__']
+
+    fourier_embeddings = model.diffusion_head.fourier_embeddings
+
+    fourier_embeddings_weight = np.load(
+        open(model_path / "fourier_weight.npy", "rb"))
+    fourier_embeddings.register_buffer(
+        "weight", torch.from_numpy(fourier_embeddings_weight))
+    fourier_embeddings_bias = np.load(
+        open(model_path / "fourier_bias.npy", "rb"))
+    fourier_embeddings.register_buffer(
+        "bias", torch.from_numpy(fourier_embeddings_bias))

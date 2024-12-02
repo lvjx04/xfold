@@ -172,21 +172,6 @@ class Evoformer(nn.Module):
         msa_mask = msa_batch.mask.to(dtype=dtype)
         msa_feat = featurization.create_msa_feat(msa_batch).to(dtype=dtype)
 
-        # (TODO) delete debug code here
-        import numpy as np
-        msa_feat = np.load(
-            open("/home/svu/e0917621/scratch/xFold/debug/msa_feat.npy", "rb"))
-        msa_feat = torch.frombuffer(msa_feat, dtype=torch.bfloat16).view(
-            msa_feat.shape).to(dtype=torch.float32)
-
-        msa_mask = np.load(
-            open("/home/svu/e0917621/scratch/xFold/debug/msa_mask.npy", "rb"))
-        msa_mask = torch.frombuffer(msa_mask, dtype=torch.bfloat16).view(
-            msa_mask.shape).to(dtype=torch.float32)
-
-        msa_feat = msa_feat.cuda()
-        msa_mask = msa_mask.cuda()
-
         msa_activations = self.msa_activations(msa_feat)
         msa_activations += self.extra_msa_target_feat(target_feat)[None]
 
@@ -316,6 +301,7 @@ class AlphaFold3(nn.Module):
             torch.sqrt(t_hat**2 - noise_level_prev**2)
         noise = noise_scale * \
             torch.randn(size=positions.shape, device=noise_scale.device)
+        noise = noise_scale
         positions_noisy = positions + noise
 
         positions_denoised = self.diffusion_head(positions_noisy=positions_noisy,
@@ -351,8 +337,8 @@ class AlphaFold3(nn.Module):
 
         noise_level = torch.tile(noise_levels[None, 0], (num_samples,))
 
-        for step_idx in range(self.diffusion_steps):
-            for sample_idx in range(num_samples):
+        for sample_idx in range(num_samples):
+            for step_idx in range(self.diffusion_steps):
                 positions[sample_idx], noise_level[sample_idx] = self._apply_denoising_step(
                     batch, embeddings, positions[sample_idx], noise_level[sample_idx], mask, noise_levels[1 + step_idx])
 
@@ -383,18 +369,6 @@ class AlphaFold3(nn.Module):
                 prev=embeddings,
                 target_feat=target_feat
             )
-
-        import numpy as np
-        embeddings["single"] = np.load(
-            open("/home/svu/e0917621/scratch/xFold/debug/single.npy", "rb"))
-        embeddings["single"] = torch.from_numpy(embeddings["single"]).cuda()
-        embeddings["pair"] = np.load(
-            open("/home/svu/e0917621/scratch/xFold/debug/pair.npy", "rb"))
-        embeddings["pair"] = torch.from_numpy(embeddings["pair"]).cuda()
-        embeddings["target_feat"] = np.load(
-            open("/home/svu/e0917621/scratch/xFold/debug/target_feat.npy", "rb"))
-        embeddings["target_feat"] = torch.frombuffer(
-            embeddings["target_feat"], dtype=torch.bfloat16).view(embeddings["target_feat"].shape).to(dtype=torch.float32).cuda()
 
         samples = self._sample_diffusion(batch, embeddings)
 
