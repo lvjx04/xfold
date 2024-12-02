@@ -10,8 +10,7 @@ readme = { file = "README.md", content-type = "text/markdown" }
 dynamic = ["version"]
 dependencies = [
     "torch", 
-    "zstandard", 
-    "rdkit==2024.3.5",
+    "einops",
 ]
 
 [tool.setuptools]
