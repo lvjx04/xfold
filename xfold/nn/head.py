@@ -18,6 +18,8 @@ from xfold import feat_batch
 from xfold.constants import atom_types
 from xfold.nn import template, atom_layout, pairformer
 
+from xfold import fastnn
+
 _CONTACT_THRESHOLD = 8.0
 _CONTACT_EPSILON = 1e-3
 
@@ -124,7 +126,7 @@ class ConfidenceHead(nn.Module):
             ) for _ in range(n_pairformer_layers)
         ])
 
-        self.logits_ln = nn.LayerNorm(self.c_pair)
+        self.logits_ln = fastnn.LayerNorm(self.c_pair)
         self.left_half_distance_logits = nn.Linear(
             self.c_pair, self.num_bins, bias=False)
 
@@ -138,7 +140,7 @@ class ConfidenceHead(nn.Module):
             [self.bin_centers, self.bin_centers[-1:] + self.step], dim=0
         )
 
-        self.pae_logits_ln = nn.LayerNorm(self.c_pair)
+        self.pae_logits_ln = fastnn.LayerNorm(self.c_pair)
         self.pae_logits = nn.Linear(self.c_pair, self.pae_num_bins, bias=False)
 
         self.register_buffer('pae_breaks', torch.linspace(
@@ -156,11 +158,11 @@ class ConfidenceHead(nn.Module):
         self.register_buffer('plddt_bin_centers', torch.arange(
             0.5 * self.bin_width, 1.0, self.bin_width))
 
-        self.plddt_logits_ln = nn.LayerNorm(self.c_single)
+        self.plddt_logits_ln = fastnn.LayerNorm(self.c_single)
         self.plddt_logits = nn.Linear(
             self.c_single, self.num_atom * self.num_plddt_bins, bias=False)
 
-        self.experimentally_resolved_ln = nn.LayerNorm(self.c_single)
+        self.experimentally_resolved_ln = fastnn.LayerNorm(self.c_single)
         self.experimentally_resolved_logits = nn.Linear(
             self.c_single, self.num_atom * 2, bias=False)
 

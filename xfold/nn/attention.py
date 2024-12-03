@@ -13,6 +13,8 @@ import einops
 import torch
 import torch.nn as nn
 
+from xfold import fastnn
+
 
 def dot_product_attention(q, k, v, mask=None, bias=None):
     scaling = q.size(-1) ** -0.5
@@ -37,7 +39,7 @@ class GridSelfAttention(nn.Module):
         self.qkv_dim = self.c_pair // self.num_head
         self.transpose = transpose
 
-        self.act_norm = nn.LayerNorm(self.c_pair)
+        self.act_norm = fastnn.LayerNorm(self.c_pair)
         self.pair_bias_projection = nn.Linear(
             self.c_pair, self.num_head, bias=False)
 
@@ -105,8 +107,8 @@ class MSAAttention(nn.Module):
 
         self.value_dim = self.c_msa // self.num_head
 
-        self.act_norm = nn.LayerNorm(self.c_msa)
-        self.pair_norm = nn.LayerNorm(self.c_pair)
+        self.act_norm = fastnn.LayerNorm(self.c_msa)
+        self.pair_norm = fastnn.LayerNorm(self.c_pair)
         self.pair_logits = nn.Linear(self.c_pair, self.num_head, bias=False)
         self.v_projection = nn.Linear(
             self.c_msa, self.num_head * self.value_dim, bias=False)

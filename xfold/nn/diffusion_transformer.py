@@ -18,6 +18,7 @@ import torch.nn.functional as F
 import einops
 
 from xfold.nn import atom_layout
+from xfold import fastnn
 
 
 class AdaptiveLayerNorm(nn.Module):
@@ -33,16 +34,16 @@ class AdaptiveLayerNorm(nn.Module):
         self.use_single_cond = use_single_cond
 
         if self.use_single_cond is True:
-            self.layer_norm = nn.LayerNorm(
+            self.layer_norm = fastnn.LayerNorm(
                 self.c_x, elementwise_affine=False, bias=False)
-            self.single_cond_layer_norm = nn.LayerNorm(
+            self.single_cond_layer_norm = fastnn.LayerNorm(
                 self.c_single_cond, bias=False)
             self.single_cond_scale = nn.Linear(
                 self.c_single_cond, self.c_x, bias=True)
             self.single_cond_bias = nn.Linear(
                 self.c_single_cond, self.c_x, bias=False)
         else:
-            self.layer_norm = nn.LayerNorm(self.c_x)
+            self.layer_norm = fastnn.LayerNorm(self.c_x)
 
     def forward(self,
                 x: torch.Tensor,
@@ -214,7 +215,7 @@ class DiffusionTransformer(nn.Module):
 
         self.num_super_blocks = self.num_blocks // self.super_block_size
 
-        self.pair_input_layer_norm = nn.LayerNorm(self.c_pair_cond)
+        self.pair_input_layer_norm = fastnn.LayerNorm(self.c_pair_cond)
         self.pair_logits_projection = nn.ModuleList(
             [nn.Linear(self.c_pair_cond, self.super_block_size * self.num_head) for _ in range(self.num_super_blocks)])
 
@@ -333,7 +334,7 @@ class DiffusionCrossAttTransformer(nn.Module):
         self.num_blocks = num_blocks
         self.num_head = num_head
 
-        self.pair_input_layer_norm = nn.LayerNorm(self.c_pair_cond, bias=False)
+        self.pair_input_layer_norm = fastnn.LayerNorm(self.c_pair_cond, bias=False)
         self.pair_logits_projection = nn.Linear(
             self.c_pair_cond, self.num_blocks * self.num_head, bias=False)
 

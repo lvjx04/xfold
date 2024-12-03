@@ -18,6 +18,8 @@ from xfold.nn import featurization, utils
 from xfold.nn.diffusion_transformer import DiffusionTransformer, DiffusionTransition
 from xfold.nn.atom_cross_attention import AtomCrossAttEncoder, AtomCrossAttDecoder
 
+from xfold import fastnn
+
 # Carefully measured by averaging multimer training set.
 SIGMA_DATA = 16.0
 
@@ -96,7 +98,7 @@ class DiffusionHead(nn.Module):
         self.seq_channel = 384
 
         self.c_pair_cond_initial = 267
-        self.pair_cond_initial_norm = nn.LayerNorm(
+        self.pair_cond_initial_norm = fastnn.LayerNorm(
             self.c_pair_cond_initial, bias=False)
         self.pair_cond_initial_projection = nn.Linear(
             self.c_pair_cond_initial, self.pair_channel, bias=False)
@@ -107,13 +109,13 @@ class DiffusionHead(nn.Module):
             self.pair_channel, c_single_cond=None)
 
         self.c_single_cond_initial = 831
-        self.single_cond_initial_norm = nn.LayerNorm(
+        self.single_cond_initial_norm = fastnn.LayerNorm(
             self.c_single_cond_initial, bias=False)
         self.single_cond_initial_projection = nn.Linear(
             self.c_single_cond_initial, self.seq_channel, bias=False)
 
         self.c_noise_embedding = 256
-        self.noise_embedding_initial_norm = nn.LayerNorm(
+        self.noise_embedding_initial_norm = fastnn.LayerNorm(
             self.c_noise_embedding, bias=False)
         self.noise_embedding_initial_projection = nn.Linear(
             self.c_noise_embedding, self.seq_channel, bias=False)
@@ -128,14 +130,14 @@ class DiffusionHead(nn.Module):
                                                           with_trunk_pair_cond=True,
                                                           with_trunk_single_cond=True)
 
-        self.single_cond_embedding_norm = nn.LayerNorm(
+        self.single_cond_embedding_norm = fastnn.LayerNorm(
             self.seq_channel, bias=False)
         self.single_cond_embedding_projection = nn.Linear(
             self.seq_channel, self.c_act, bias=False)
 
         self.transformer = DiffusionTransformer()
 
-        self.output_norm = nn.LayerNorm(self.c_act, bias=False)
+        self.output_norm = fastnn.LayerNorm(self.c_act, bias=False)
 
         self.atom_cross_att_decoder = AtomCrossAttDecoder()
 

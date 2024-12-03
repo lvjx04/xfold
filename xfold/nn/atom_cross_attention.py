@@ -21,6 +21,8 @@ from xfold import feat_batch
 from xfold.nn import atom_layout, utils
 from xfold.nn.diffusion_transformer import DiffusionCrossAttTransformer
 
+from xfold import fastnn
+
 
 @dataclasses.dataclass(frozen=True)
 class AtomCrossAttEncoderOutput:
@@ -112,7 +114,7 @@ class AtomCrossAttEncoder(nn.Module):
         
         if self.with_trunk_single_cond is True:
             self.c_trunk_single_cond = 384
-            self.lnorm_trunk_single_cond = nn.LayerNorm(
+            self.lnorm_trunk_single_cond = fastnn.LayerNorm(
                 self.c_trunk_single_cond, bias=False)
             self.embed_trunk_single_cond = nn.Linear(
                 self.c_trunk_single_cond, self.per_atom_channels, bias=False)
@@ -123,7 +125,7 @@ class AtomCrossAttEncoder(nn.Module):
             
         if self.with_trunk_pair_cond is True:
             self.c_trunk_pair_cond = 128
-            self.lnorm_trunk_pair_cond = nn.LayerNorm(
+            self.lnorm_trunk_pair_cond = fastnn.LayerNorm(
                 self.c_trunk_pair_cond, bias=False)
             self.embed_trunk_pair_cond = nn.Linear(
                 self.c_trunk_pair_cond, self.per_atom_pair_channels, bias=False)
@@ -371,7 +373,7 @@ class AtomCrossAttDecoder(nn.Module):
         self.atom_transformer_decoder = DiffusionCrossAttTransformer(
             c_query=self.per_atom_channels)
 
-        self.atom_features_layer_norm = nn.LayerNorm(
+        self.atom_features_layer_norm = fastnn.LayerNorm(
             self.per_atom_channels, bias=False)
         self.atom_features_to_position_update = nn.Linear(
             self.per_atom_channels, 3, bias=False)

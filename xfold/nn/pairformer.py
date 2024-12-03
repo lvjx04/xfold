@@ -20,6 +20,8 @@ from xfold.nn.triangle_multiplication import TriangleMultiplication
 from xfold.nn.attention import GridSelfAttention, MSAAttention
 from xfold.nn.diffusion_transformer import SelfAttention
 
+from xfold import fastnn
+
 
 class PairformerBlock(nn.Module):
     """Implements Algorithm 17 [Line2-Line8] in AF3
@@ -65,7 +67,7 @@ class PairformerBlock(nn.Module):
             c_x=c_pair, num_intermediate_factor=self.num_intermediate_factor)
         self.c_single = c_single
         if self.with_single is True:
-            self.single_pair_logits_norm = nn.LayerNorm(c_pair)
+            self.single_pair_logits_norm = fastnn.LayerNorm(c_pair)
             self.single_pair_logits_projection = nn.Linear(
                 c_pair, n_heads, bias=False)
             self.single_attention_ = SelfAttention(

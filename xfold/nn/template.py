@@ -19,6 +19,7 @@ from xfold import geometry
 from xfold.constants import residue_names
 from xfold.nn import pairformer
 
+from xfold import fastnn
 
 @dataclass
 class DistogramFeaturesConfig:
@@ -167,7 +168,7 @@ class SingleTemplateEmbedding(nn.Module):
 
         self.dgram_features_config = DistogramFeaturesConfig()
 
-        self.query_embedding_norm = nn.LayerNorm(128)
+        self.query_embedding_norm = fastnn.LayerNorm(128)
         self.template_pair_embedding_0 = nn.Linear(
             39, self.num_channels, bias=False)
         self.template_pair_embedding_1 = nn.Linear(
@@ -192,7 +193,7 @@ class SingleTemplateEmbedding(nn.Module):
              for _ in range(self.template_stack_num_layer)]
         )
 
-        self.output_layer_norm = nn.LayerNorm(self.num_channels)
+        self.output_layer_norm = fastnn.LayerNorm(self.num_channels)
 
     def construct_input(
         self, query_embedding, templates: features.Templates, multichain_mask_2d

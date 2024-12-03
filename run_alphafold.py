@@ -52,6 +52,7 @@ import torch.utils._pytree as pytree
 
 from xfold.alphafold3 import AlphaFold3
 from xfold.params import import_jax_weights_
+from xfold.fastnn import config as fastnn_config
 
 
 _HOME_DIR = pathlib.Path(os.environ.get('HOME'))
@@ -106,6 +107,12 @@ _RUN_INFERENCE = flags.DEFINE_bool(
     'run_inference',
     True,
     'Whether to run inference on the fold inputs.',
+)
+
+_USE_FASTNN = flags.DEFINE_bool(
+    'fastnn',
+    True,
+    'Whether to run inference with fastnn.',
 )
 
 # Binary paths.
@@ -220,6 +227,9 @@ class ModelRunner:
         import_jax_weights_(self._model, model_dir)
 
         self._model = self._model.to(device=self._device)
+
+        if _USE_FASTNN.value is True:
+            fastnn_config.layer_norm_implementation = 'triton'
 
     @torch.inference_mode()
     def run_inference(

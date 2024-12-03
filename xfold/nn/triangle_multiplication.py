@@ -13,16 +13,18 @@
 import torch
 import torch.nn as nn
 
+from xfold import fastnn
+
 
 class TriangleMultiplication(nn.Module):
     def __init__(self, c_pair: int = 128, _outgoing: bool = True) -> None:
         super(TriangleMultiplication, self).__init__()
 
         self.c_pair = c_pair
-        self.left_norm_input = nn.LayerNorm(self.c_pair)
+        self.left_norm_input = fastnn.LayerNorm(self.c_pair)
         self.projection = nn.Linear(self.c_pair, 2 * self.c_pair, bias=False)
         self.gate = nn.Linear(self.c_pair, 2 * self.c_pair, bias=False)
-        self.center_norm = nn.LayerNorm(self.c_pair)
+        self.center_norm = fastnn.LayerNorm(self.c_pair)
         self.output_projection = nn.Linear(
             self.c_pair, self.c_pair, bias=False)
         self.gating_linear = nn.Linear(self.c_pair, self.c_pair, bias=False)

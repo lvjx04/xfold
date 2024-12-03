@@ -14,6 +14,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from xfold import fastnn
+
 
 class Transition(nn.Module):
 
@@ -21,7 +23,7 @@ class Transition(nn.Module):
         super(Transition, self).__init__()
         self.num_intermediate_factor = num_intermediate_factor
         self.c_in = c_x
-        self.input_layer_norm = nn.LayerNorm(c_x)
+        self.input_layer_norm = fastnn.LayerNorm(c_x)
         self.transition1 = nn.Linear(
             c_x, self.num_intermediate_factor * c_x * 2, bias=False)
         self.transition2 = nn.Linear(
@@ -44,7 +46,7 @@ class OuterProductMean(nn.Module):
         self.num_output_channel = num_output_channel
         self.epsilon = 1e-3
 
-        self.layer_norm_input = nn.LayerNorm(self.c_msa)
+        self.layer_norm_input = fastnn.LayerNorm(self.c_msa)
         self.left_projection = nn.Linear(
             self.c_msa, self.num_outer_channel, bias=False)
         self.right_projection = nn.Linear(
