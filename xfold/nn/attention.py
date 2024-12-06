@@ -16,21 +16,6 @@ import torch.nn as nn
 from xfold import fastnn
 
 
-def dot_product_attention(q, k, v, mask=None, bias=None):
-    scaling = q.size(-1) ** -0.5
-    q = q * scaling
-    logits = torch.matmul(q, k.transpose(-1, -2))
-
-    if bias is not None:
-        logits += bias
-
-    if mask is not None:
-        logits.masked_fill_(~mask, -1e9)
-
-    weights = torch.softmax(logits, dim=-1)
-    return torch.matmul(weights, v)
-
-
 class GridSelfAttention(nn.Module):
     def __init__(self, c_pair: int = 128, num_head: int = 4, transpose: bool = False):
         super(GridSelfAttention, self).__init__()
@@ -59,11 +44,9 @@ class GridSelfAttention(nn.Module):
         q, k, v = map(lambda t: einops.rearrange(
             t, 'b n (h d) -> b h n d', h=self.num_head), [q, k, v])
 
-        bias = torch.squeeze(bias, 0)
-
-        weighted_avg = dot_product_attention(q, k, v,
-                                             mask=mask,
-                                             bias=bias)
+        weighted_avg = fastnn.dot_product_attention(q, k, v,
+                                                    mask=mask,
+                                                    bias=bias)
 
         weighted_avg = einops.rearrange(weighted_avg, 'b h n d -> b n (h d)')
 
@@ -86,8 +69,6 @@ class GridSelfAttention(nn.Module):
 
         if self.transpose:
             pair = pair.permute(1, 0, 2)
-
-        mask = mask[:, None, None, :].to(dtype=torch.bool)
 
         pair = self._attention(pair, mask, nonbatched_bias)
 

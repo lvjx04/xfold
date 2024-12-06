@@ -169,8 +169,6 @@ class SelfAttention(nn.Module):
 
         assert (single_cond is None) == (self.use_single_cond is False)
 
-        bias = (1e9 * (mask.to(dtype=x.dtype) - 1.0))[..., None, None, :]
-
         x = self.adaptive_layernorm(x, single_cond)
 
         q = self.q_projection(x)
@@ -178,16 +176,14 @@ class SelfAttention(nn.Module):
         v = self.v_projection(x)
 
         q, k, v = map(lambda t: einops.rearrange(
-            t, 'n (h c) -> n h c', h=self.num_head), [q, k, v])
+            t, 'n (h c) -> h n c', h=self.num_head).unsqueeze(0), [q, k, v])
 
-        logits = torch.einsum('...qhc,...khc->...hqk',
-                              q * self.qkv_dim ** (-0.5), k) + bias
-        if pair_logits is not None:
-            logits += pair_logits  # (num_heads, seq_len, seq_len)
+        weighted_avg = fastnn.dot_product_attention(
+            q, k, v, mask=mask, bias=pair_logits
+        )
 
-        weights = torch.softmax(logits, dim=-1)
-        weighted_avg = torch.einsum('...hqk,...khc->...qhc', weights, v)
-        weighted_avg = weighted_avg.reshape(weighted_avg.shape[:-2] + (-1,))
+        weighted_avg = weighted_avg.squeeze(0)
+        weighted_avg = einops.rearrange(weighted_avg, 'h q c -> q (h c)')
 
         gate_logits = self.gating_query(x)
         weighted_avg *= torch.sigmoid(gate_logits)

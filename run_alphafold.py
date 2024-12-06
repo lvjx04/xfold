@@ -230,6 +230,7 @@ class ModelRunner:
 
         if _USE_FASTNN.value is True:
             fastnn_config.layer_norm_implementation = 'triton'
+            fastnn_config.dot_product_attention_implementation = 'triton'
 
     @torch.inference_mode()
     def run_inference(

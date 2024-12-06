@@ -78,6 +78,7 @@ class LayerNormTritonFunc(torch.autograd.Function):
 
     @staticmethod
     def forward(ctx, x, normalized_shape, weight, bias, eps):
+        x = x.contiguous()
         # allocate output
         y = torch.empty_like(x)
         # reshape input data into 2D tensor
@@ -155,7 +156,6 @@ class LayerNorm(nn.Module):
                 input, self.normalized_shape, self.weight, self.bias, self.eps
             )
         elif fastnn_config.layer_norm_implementation == "triton":
-            input = input.contiguous().to(torch.float32)
             fast_out = LayerNormTritonFunc.apply(
                 input, self.normalized_shape, self.weight, self.bias, self.eps
             )
