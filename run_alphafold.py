@@ -209,6 +209,12 @@ _NHMMER_N_CPU = flags.DEFINE_integer(
     ' beyond 8 CPUs provides very little additional speedup.',
 )
 
+_NUM_DIFFUSION_SAMPLES = flags.DEFINE_integer(
+    'num_diffusion_samples',
+    5,
+    'Number of diffusion samples to generate.',
+)
+
 
 class ModelRunner:
     """Helper class to run structure prediction stages."""
@@ -221,7 +227,7 @@ class ModelRunner:
         self._model_dir = model_dir
         self._device = device
 
-        self._model = AlphaFold3()
+        self._model = AlphaFold3(num_samples=_NUM_DIFFUSION_SAMPLES.value)
         self._model.eval()
         print('loading the model parameters...')
         import_jax_weights_(self._model, model_dir)

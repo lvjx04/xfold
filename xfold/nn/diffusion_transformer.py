@@ -108,7 +108,7 @@ class DiffusionTransition(nn.Module):
         self.adaptive_layernorm = AdaptiveLayerNorm(
             self.c_x, self.c_single_cond, self.use_single_cond)
         self.transition1 = nn.Linear(
-            self.c_x, 2 * self.c_x * self.num_intermediate_factor)
+            self.c_x, 2 * self.c_x * self.num_intermediate_factor, bias=False)
 
         self.adaptive_zero_init = AdaLNZero(
             self.num_intermediate_factor * self.c_x,
@@ -213,7 +213,7 @@ class DiffusionTransformer(nn.Module):
 
         self.pair_input_layer_norm = fastnn.LayerNorm(self.c_pair_cond)
         self.pair_logits_projection = nn.ModuleList(
-            [nn.Linear(self.c_pair_cond, self.super_block_size * self.num_head) for _ in range(self.num_super_blocks)])
+            [nn.Linear(self.c_pair_cond, self.super_block_size * self.num_head, bias=False) for _ in range(self.num_super_blocks)])
 
         self.self_attention = nn.ModuleList(
             [SelfAttention(self.c_act, self.c_single_cond, use_single_cond=True) for _ in range(self.num_blocks)])

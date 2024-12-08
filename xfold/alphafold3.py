@@ -204,8 +204,6 @@ class Evoformer(nn.Module):
         target_feat: torch.Tensor
     ) -> dict[str, torch.Tensor]:
 
-        num_residues = target_feat.shape[0]
-
         pair_activations, pair_mask = self._seq_pair_embedding(
             batch.token_features, target_feat
         )
