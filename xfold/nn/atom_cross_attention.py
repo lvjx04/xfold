@@ -275,7 +275,7 @@ class AtomCrossAttEncoder(nn.Module):
                     tokens_to_queries.gather_mask[:, :, None]
                     & tokens_to_keys.gather_mask[:, None, :]
                 ),
-                input_shape=torch.tensor((num_tokens, num_tokens), device=pair_act.device),
+                input_shape=torch.tensor((num_tokens, num_tokens), device=torch.device('cpu')),
             )
             # Gather the conditioning and add it to the atom-pair activations.
             pair_act += atom_layout.convert(

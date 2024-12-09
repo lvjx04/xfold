@@ -312,8 +312,7 @@ class ConfidenceHead(nn.Module):
 
         def get_tmscore_adjusted_pae(num_interface_tokens, bin_centers, pae_probs):
             # Clip to avoid negative/undefined d0.
-            clipped_num_res = torch.maximum(num_interface_tokens, torch.tensor(
-                19, device=num_interface_tokens.device))
+            clipped_num_res = torch.clamp(num_interface_tokens, min=19)
 
             # Compute d_0(num_res) as defined by TM-score, eqn. (5) in
             # http://zhanglab.ccmb.med.umich.edu/papers/2004_3.pdf
@@ -341,9 +340,10 @@ class ConfidenceHead(nn.Module):
         num_interface_tokens -= x * (num_interface_tokens // 2)
         num_interface_tokens = num_interface_tokens * pair_mask
 
-        num_global_tokens = torch.full(
-            size=pair_mask.shape, fill_value=seq_mask.sum(), dtype=torch.int32, device=x.device
+        num_global_tokens = torch.ones(
+            size=pair_mask.shape, dtype=torch.int32, device=x.device
         )
+        num_global_tokens *= seq_mask.sum()
 
         assert num_global_tokens.dtype == torch.int32
         assert num_interface_tokens.dtype == torch.int32

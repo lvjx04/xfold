@@ -122,7 +122,7 @@ class DiffusionTransition(nn.Module):
         x = self.adaptive_layernorm(x, single_cond)
         x = self.transition1(x)
         a, b = torch.chunk(x, 2, dim=-1)
-        c = F.silu(a) * b
+        c = fastnn.silu_mul(a, b)
 
         return self.adaptive_zero_init(c, single_cond)
 

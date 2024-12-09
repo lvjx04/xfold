@@ -48,11 +48,9 @@ def random_rotation(device, dtype):
     # Create a random rotation (Gram-Schmidt orthogonalization of two
     # random normal vectors)
     v0, v1 = torch.randn(size=(2, 3), dtype=dtype, device=device)
-    e0 = v0 / torch.maximum(torch.tensor(1e-10,
-                            device=device), torch.linalg.norm(v0))
+    e0 = v0 / torch.clamp(torch.linalg.norm(v0), min=1e-10)
     v1 = v1 - e0 * torch.dot(v1, e0)
-    e1 = v1 / torch.maximum(torch.tensor(1e-10,
-                            device=device), torch.linalg.norm(v1))
+    e1 = v1 / torch.clamp(torch.linalg.norm(v1), min=1e-10)
     e2 = torch.cross(e0, e1, dim=-1)
     return torch.stack([e0, e1, e2])
 

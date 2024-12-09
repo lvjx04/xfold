@@ -45,8 +45,9 @@ def dgram_from_positions(positions, config: DistogramFeaturesConfig):
     lower_breaks = torch.linspace(
         config.min_bin, config.max_bin, config.num_bins, device=positions.device)
     lower_breaks = torch.square(lower_breaks)
+    upper_breaks_last = torch.ones(1, device=lower_breaks.device) * 1e8
     upper_breaks = torch.concatenate(
-        [lower_breaks[1:], torch.tensor([1e8], dtype=torch.float32, device=lower_breaks.device)], dim=-1
+        [lower_breaks[1:], upper_breaks_last], dim=-1
     )
     dist2 = torch.sum(
         torch.square(

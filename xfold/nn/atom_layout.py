@@ -77,10 +77,11 @@ class GatherInfo:
     ) -> 'GatherInfo':
         """Creates GatherInfo from a given dictionary."""
         prefix = f'{key_prefix}:' if key_prefix else ''
+        # we force the input_shape to be on the CPU
         return cls(
             gather_idxs=d[prefix + 'gather_idxs'],
             gather_mask=d[prefix + 'gather_mask'],
-            input_shape=d[prefix + 'input_shape'],
+            input_shape=d[prefix + 'input_shape'].to(device=torch.device('cpu')),
         )
 
 
@@ -101,7 +102,10 @@ def convert(
     if layout_axes != tuple(range(layout_axes_begin, layout_axes_end)):
         raise ValueError(f'layout_axes must be continuous. Got {layout_axes}.')
     layout_shape = arr.shape[layout_axes_begin:layout_axes_end]
-    gather_info_input_shape = gather_info.input_shape.cpu().numpy()
+
+    # we force the input_shape to be on the CPU
+    assert gather_info.input_shape.device == torch.device("cpu")
+    gather_info_input_shape = gather_info.input_shape.numpy()
 
     # Ensure that the layout shape is compatible
     # with the gather_info. I.e. the first axis size must be equal or greater

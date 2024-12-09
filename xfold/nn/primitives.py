@@ -12,7 +12,6 @@
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 
 from xfold import fastnn
 
@@ -33,7 +32,7 @@ class Transition(nn.Module):
         x = self.input_layer_norm(x)
         x = self.transition1(x)
         a, b = torch.chunk(x, 2, dim=-1)
-        c = F.silu(a) * b
+        c = fastnn.silu_mul(a, b)
         return self.transition2(c)
 
 

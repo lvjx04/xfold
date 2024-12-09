@@ -44,7 +44,5 @@ def mask_mean(mask, value, dim=None, keepdim=False, eps=1e-10):
             assert mask_size == value_size, error
 
     return torch.sum(mask * value, keepdim=keepdim, dim=dim) / (
-        torch.maximum(
-            torch.sum(mask, keepdim=keepdim, dim=dim) * broadcast_factor, torch.tensor(eps, device=mask.device)
-        )
+        torch.clamp(torch.sum(mask, keepdim=keepdim, dim=dim) * broadcast_factor, min=eps)
     )

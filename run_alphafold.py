@@ -237,6 +237,8 @@ class ModelRunner:
         if _USE_FASTNN.value is True:
             fastnn_config.layer_norm_implementation = 'triton'
             fastnn_config.dot_product_attention_implementation = 'triton'
+            # (TODO) need more performance testing
+            # fastnn_config.silu_implementation = 'triton'
 
     @torch.inference_mode()
     def run_inference(
@@ -322,6 +324,7 @@ def predict_structure(
     all_inference_results = []
     for seed, example in zip(fold_input.rng_seeds, featurised_examples):
         print(f'Running model inference for seed {seed}...')
+        torch.cuda.synchronize()
         inference_start_time = time.time()
 
         # set the random seed for the model.
@@ -330,6 +333,7 @@ def predict_structure(
         np.random.seed(seed)
 
         result = model_runner.run_inference(example)
+        torch.cuda.synchronize()
         print(
             f'Running model inference for seed {seed} took '
             f' {time.time() - inference_start_time:.2f} seconds.'
