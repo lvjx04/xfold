@@ -83,20 +83,6 @@ _MODEL_DIR = flags.DEFINE_string(
     'Path to the model to use for inference.',
 )
 
-_FLASH_ATTENTION_IMPLEMENTATION = flags.DEFINE_enum(
-    'flash_attention_implementation',
-    default='xla',
-    enum_values=['triton', 'cudnn', 'xla'],
-    help=(
-        "Flash attention implementation to use. 'triton' and 'cudnn' uses a"
-        ' Triton and cuDNN flash attention implementation, respectively. The'
-        ' Triton kernel is fastest and has been tested more thoroughly. The'
-        " Triton and cuDNN kernels require Ampere GPUs or later. 'xla' uses an"
-        ' XLA attention implementation (no flash attention) and is portable'
-        ' across GPU devices.'
-    ),
-)
-
 # Control which stages to run.
 _RUN_DATA_PIPELINE = flags.DEFINE_bool(
     'run_data_pipeline',
@@ -237,8 +223,7 @@ class ModelRunner:
         if _USE_FASTNN.value is True:
             fastnn_config.layer_norm_implementation = 'triton'
             fastnn_config.dot_product_attention_implementation = 'triton'
-            # (TODO) need more performance testing
-            # fastnn_config.silu_implementation = 'triton'
+            fastnn_config.gated_linear_unit_implementation = 'triton'
 
     @torch.inference_mode()
     def run_inference(

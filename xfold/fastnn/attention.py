@@ -139,7 +139,6 @@ def dot_product_attention_triton(q: torch.Tensor,
         bias = bias.contiguous()
 
     sm_scale = 1. / math.sqrt(q.size(-1))
-    # q *= sm_scale
     BLOCK = 64
     # shape constraints
     Lq, Lk, Lv = q.shape[-1], k.shape[-1], v.shape[-1]
@@ -148,6 +147,7 @@ def dot_product_attention_triton(q: torch.Tensor,
     o = torch.empty_like(q)
     grid = (triton.cdiv(q.shape[2], BLOCK), q.shape[0] * q.shape[1])
     num_warps = 4 if Lk <= 64 else 8
+    num_stages = 2
 
     _attention_core[grid](
         q,
@@ -183,7 +183,7 @@ def dot_product_attention_triton(q: torch.Tensor,
         use_mask_2d=(mask != None) and len(mask.shape) == 2,
         use_bias=(bias != None),
         num_warps=num_warps,
-        num_stages=1,
+        num_stages=num_stages,
     )
 
     return o

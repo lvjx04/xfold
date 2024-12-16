@@ -118,12 +118,8 @@ class DiffusionTransition(nn.Module):
         )
 
     def forward(self, x: torch.Tensor, single_cond: Optional[torch.Tensor] = None) -> torch.Tensor:
-
         x = self.adaptive_layernorm(x, single_cond)
-        x = self.transition1(x)
-        a, b = torch.chunk(x, 2, dim=-1)
-        c = fastnn.silu_mul(a, b)
-
+        c = fastnn.gated_linear_unit(x, self.transition1.weight.T)
         return self.adaptive_zero_init(c, single_cond)
 
 

@@ -30,9 +30,7 @@ class Transition(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = self.input_layer_norm(x)
-        x = self.transition1(x)
-        a, b = torch.chunk(x, 2, dim=-1)
-        c = fastnn.silu_mul(a, b)
+        c = fastnn.gated_linear_unit(x, self.transition1.weight.T)
         return self.transition2(c)
 
 
