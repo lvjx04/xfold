@@ -713,7 +713,7 @@ def get_translation_dict(model):
 
 
 def import_jax_weights_(model, model_path: pathlib.Path):
-    params = get_alphafold3_params(model_path / "af3.bin.zst")
+    params = get_alphafold3_params(model_path / "af3.bin")
 
     translations = get_translation_dict(model)
 

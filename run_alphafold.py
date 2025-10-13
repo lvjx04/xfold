@@ -242,9 +242,12 @@ class ModelRunner:
         featurised_example['deletion_mean'] = featurised_example['deletion_mean'].to(
             dtype=torch.float32)
 
-        with torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16):
-            result = self._model(featurised_example)
-            result['__identifier__'] = self._model.__identifier__.numpy()
+        # with torch.amp.autocast(device_type="cpu", dtype=torch.bfloat16):
+        #     result = self._model(featurised_example)
+        #     result['__identifier__'] = self._model.__identifier__.numpy()
+
+        result = self._model(featurised_example)
+        result['__identifier__'] = self._model.__identifier__.numpy()
 
         result = pytree.tree_map_only(
             torch.Tensor,
@@ -309,7 +312,7 @@ def predict_structure(
     all_inference_results = []
     for seed, example in zip(fold_input.rng_seeds, featurised_examples):
         print(f'Running model inference for seed {seed}...')
-        torch.cuda.synchronize()
+        # torch.cuda.synchronize()
         inference_start_time = time.time()
 
         # set the random seed for the model.
@@ -318,7 +321,7 @@ def predict_structure(
         np.random.seed(seed)
 
         result = model_runner.run_inference(example)
-        torch.cuda.synchronize()
+        # torch.cuda.synchronize()
         print(
             f'Running model inference for seed {seed} took '
             f' {time.time() - inference_start_time:.2f} seconds.'
@@ -581,7 +584,7 @@ def main(_):
         data_pipeline_config = None
 
     if _RUN_INFERENCE.value:
-        device = torch.device('cuda')
+        device = torch.device('cpu')
         print(f'Found local device: {device}')
 
         print('Building model from scratch...')
@@ -593,7 +596,7 @@ def main(_):
         print('Skipping running model inference.')
         model_runner = None
 
-    print(f'Processing {len(fold_inputs)} fold inputs.')
+    # print(f'Processing {len(fold_inputs)} fold inputs.')
     for fold_input in fold_inputs:
         process_fold_input(
             fold_input=fold_input,
@@ -603,7 +606,7 @@ def main(_):
                 _OUTPUT_DIR.value, fold_input.sanitised_name()),
         )
 
-    print(f'Done processing {len(fold_inputs)} fold inputs.')
+    # print(f'Done processing {len(fold_inputs)} fold inputs.')
 
 
 if __name__ == '__main__':
