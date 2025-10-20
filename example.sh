@@ -14,7 +14,7 @@ conda activate af3       # 替换为自己的alphafold3环境名称
 # ================================
 # 修改为自己的路径
 INPUT_JSON=/home/sccomp/WORK/alphafold3/xfold/processed/37aa_2JO9.json
-MODEL_DIR=/WORK/sccomp//weights # 无需替换，这是公共可读目录
+MODEL_DIR=/WORK/sccomp/weights # 无需替换，这是公共可读目录
 OUTPUT_DIR=output
 
 # 运行脚本
